@@ -1,0 +1,86 @@
+name: YumurtaBusiness
+options:
+  bundleIdPrefix: ru.marketplace
+  createIntermediateGroups: true
+# Внешних пакетов нет. Firebase убран: push идёт прямым APNs (см. Sources/App/AppDelegate.swift),
+# ключ .p8 живёт на сервере. Заодно ушла зависимость на GoogleService-Info.plist,
+# без которого push не работал вовсе, и минуты сборки на разрешение SPM.
+targets:
+  YumurtaBusiness:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [Sources]
+    dependencies:
+      - target: NotificationService
+    info:
+      path: Generated/Info.plist
+      properties:
+        # Имя под иконкой на телефоне. Держим таким же, как название в
+        # App Store: Apple требует, чтобы они узнавались как одно приложение.
+        CFBundleDisplayName: Yumurta Seller
+        # ВАЖНО. XcodeGen при генерации Info.plist подставляет СВОЁ умолчание
+        # CFBundleShortVersionString = "1.0" литералом и MARKETING_VERSION
+        # ниже для этого НЕ использует. Если ключа тут нет, версия остаётся
+        # 1.0 в любой сборке, и вторую публикацию Apple отклоняет (90062,
+        # 90186). Значения из info.properties перекрывают умолчания XcodeGen,
+        # поэтому ключ обязан быть здесь. Поднимать версию — здесь же.
+        #
+        # 1.0.1 уже одобрена в App Store, и её ветка закрыта для новых сборок
+        # (коды 90062 и 90186 при публикации 30.09.2026). 1.0.2 тоже закрыта
+        # (шаг «Версия свободна», сборка 35, 16.10.2026). Поэтому 1.0.3.
+        # Версия ПРИЛОЖЕНИЯ и версия расширения уведомлений обязаны совпадать —
+        # обе ниже тоже 1.0.4. 1.0.4 — продажи, контроль потерь, курьеры Yumurta (21.10.2026).
+        # 1.0.5 (22.10.2026): Apple закрыл 1.0.4 для новых сборок (шаг «Версия свободна»);
+        # расчёты с курьерами по пределам сервера, сроки оплат по QR, ссылки на справку.
+        # 1.0.6 (22.10.2026): приход по накладной поставщика («было N ₽», наценка и новая
+        # розничная цена), раздел «Переоценка» с наценками категорий и журналом цен.
+        # 1.0.7 (24.10.2026): Apple закрыл 1.0.6 для новых сборок (шаг «Версия свободна», сборка 6);
+        # помощник, вызов «на потом», защита от повторов при обрыве связи.
+        CFBundleShortVersionString: "1.0.7"
+        NSCameraUsageDescription: "Камера нужна для фото товаров и мастеров"
+        NSPhotoLibraryUsageDescription: "Галерея нужна для загрузки фото товаров и мастеров"
+        UILaunchScreen:
+          UIColorName: LaunchBG
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [remote-notification]
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: ru.marketplace.business
+            CFBundleURLSchemes: [yumurta-business]
+    entitlements:
+      path: Generated/YumurtaBusiness.entitlements
+      properties:
+        # production — то, чего требует профиль App Store и TestFlight.
+        # С development подпись не сходится, а push не доходит.
+        aps-environment: production
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.marketplace.business
+        MARKETING_VERSION: "1.0.7"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Manual
+  # Rich push: расширение скачивает картинку из data.image / fcm_options.image (как в клиентском приложении)
+  NotificationService:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [NotificationService]
+    info:
+      path: Generated/NotificationServiceInfo.plist
+      properties:
+        CFBundleDisplayName: Yumurta Seller Notifications
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.marketplace.business.notificationservice
+        MARKETING_VERSION: "1.0.7"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: 1
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Manual

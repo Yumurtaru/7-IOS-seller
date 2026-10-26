@@ -1,0 +1,7 @@
+{
+  "_": "Настройки для ci/asc_store.py у продавца: только карточка версии и проверка перед подачей обновления. Карточку магазина (тексты, скриншоты) у живого приложения Codemagic не трогает.",
+  "bundle_id": "ru.marketplace.business",
+  "locale": "ru",
+  "gate": "update",
+  "demo_account_required": true
+}

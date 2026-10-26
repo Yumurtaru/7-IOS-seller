@@ -1,0 +1,35 @@
+Dear App Review team,
+
+Re: Guideline 2.1(b), submission 1846cafd-2690-46d5-a47c-0a11eda1df5a.
+
+CORRECTION. Our earlier reply said the subscription plans section had been removed. That was inaccurate, and we apologise: it was only hidden behind a server-side setting that defaults to "on" until the app's first server response, so your reviewer still saw it. In this build the screen, the purchase action, the menu entry and that switch are deleted from the source. No code path can display subscription plans.
+
+ABOUT THE APP. Yumurta Seller is a free B2B app for merchants - sole proprietors and companies - selling physical goods (groceries, prepared food) and real-world services (haircuts, clinic visits) on the yumurta.ru marketplace in Russia. It is a management dashboard: orders, catalogue, stock, couriers, staff, analytics. Consumers cannot use it: there is no sign-up in the app, and an account exists only after we verify a business tax ID and sign a merchant contract.
+
+1) PAID CONTENT OR SUBSCRIPTIONS? None. No paid content and no subscriptions exist - not in this app, not in our Android app, not on our website. The app is free and every feature is available to every merchant at no charge. Nothing is locked behind a payment.
+
+Our marketplace earns money one way only: per-order fees on real-world orders.
+- Service fee: a fixed amount or a percentage of the goods subtotal, set per merchant. Depending on that merchant's contract it is either shown to the shopper as a line on their order in the consumer app, or deducted from the merchant's settlement account.
+- Commission: a percentage or fixed amount on each fulfilled order, deducted from the merchant's settlement account.
+Both are charged only when an order is fulfilled: goods delivered to a buyer's street address, or a service performed in person.
+
+To make those deductions possible the app shows the merchant's settlement account ("Koshelek"): a prepaid balance held with us, topped up by bank transfer against an invoice. It buys no digital content and unlocks nothing in the app. If it runs out, the merchant stops receiving new orders; the app behaves the same.
+
+The app also offers listing promotion ("Prodvizhenie"): a merchant may spend from that account to rank their physical-goods listings higher in the marketplace for a chosen number of days. This is business advertising for a physical store, shown to shoppers on our website and consumer app, never inside Yumurta Seller - the same model as advertising-manager apps for businesses.
+
+Guideline 3.1.5(a) requires purchases of physical goods and services consumed outside the app to use a purchase method other than In-App Purchase, which is why these use the settlement account.
+
+2) WHERE ARE THEY PURCHASED? Nowhere. Nothing accessed in the app is purchased anywhere, inside or outside it.
+
+3) PREVIOUSLY PURCHASED CONTENT ACCESSIBLE IN THE APP? None. No merchant holds a subscription or entitlement, and no screen grants access to one.
+
+4) PAID FEATURES UNLOCKED WITHOUT IAP? None. No digital content exists, and no feature is unlocked by any payment. Every function is identical for every merchant regardless of balance.
+
+5) ENTERPRISE SERVICES SOLD TO SINGLE USERS, CONSUMERS OR FAMILIES? No - exclusively to registered businesses: sole proprietors (IP), limited companies (OOO) and registered self-employed professionals, each under a signed B2B contract with the operator, IP Mamedov Anar Yusif ogly (OGRNIP 317619600075150, INN 614904997565). Fees and advertising are invoiced to that legal entity with tax documentation. No consumer can obtain an account.
+
+6) PHYSICAL GOODS BUNDLED WITH DIGITAL CONTENT? No. There is no digital content anywhere in our service, so no such bundle exists. Merchants deal only with physical goods and real-world services delivered or performed offline.
+
+A demo merchant account is in the sign-in fields above. We can supply a screen recording or any further detail.
+
+Kind regards,
+Yumurta
