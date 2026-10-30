@@ -6,14 +6,15 @@ import SwiftUI
 // ============================================================================
 
 enum ClientSegments {
+    /// АY: те же подписи, что в кабинете и на Android; со сводкой сервера — с числом.
     static let chips: [(String?, String)] = [
-        (nil, "Все"), ("loyal", "Лояльные"), ("at_risk", "Уходят"), ("churned", "Потеряны"),
+        (nil, "Все"), ("loyal", "Постоянные"), ("at_risk", "Под угрозой ухода"), ("churned", "Ушедшие"),
     ]
     static func label(_ s: String?) -> String {
         switch s {
-        case "loyal": return "Лояльный"
-        case "at_risk": return "Под риском"
-        case "churned": return "Потерян"
+        case "loyal": return "Постоянный"
+        case "at_risk": return "Под угрозой ухода"
+        case "churned": return "Ушёл"
         default: return s ?? "—"
         }
     }
@@ -39,14 +40,36 @@ final class ClientsViewModel: ObservableObject {
         didSet { if segment != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } }
     }
 
+    /// АY: сводка сегментов (nil — старый сервер); есть — сервер знает и sort/dir.
+    @Published var segments: ClientSegmentsStats?
+    @Published var sort: ClientSort = .spent {
+        didSet { if sort != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } }
+    }
+
     private var searchTask: Task<Void, Never>?
 
+    func loadSegments() async {
+        let s = await API.shared.clientSegments()
+        segments = s
+        // Сайт откатили — сортировку снимаем: список шёл бы «по сумме» под другой подписью.
+        if s == nil && sort != .spent { sort = .spent }
+    }
+
     func load() async {
+        // Сортировка выбрана — сначала убеждаемся, что сервер её ещё знает
+        // (сводка сегментов отвечает): иначе список «по сумме» шёл бы под другой подписью.
+        if sort != .spent && segments != nil {
+            let s = await API.shared.clientSegments()
+            if s == nil { segments = nil; sort = .spent; return }   // didSet sort перечитает
+            segments = s
+        }
         loadGen += 1
         let myGen = loadGen
         if items.isEmpty { state = .loading }
         do {
-            let fresh = try await API.shared.clients(search: search, segment: segment)
+            let sq = segments != nil ? sort.query : nil
+            let fresh = try await API.shared.clients(search: search, segment: segment,
+                                                     sort: sq?.sort, dir: sq?.dir)
             guard myGen == loadGen else { return }
             items = fresh
             state = .loaded
@@ -68,6 +91,35 @@ final class ClientsViewModel: ObservableObject {
     }
 }
 
+/// АY: сортировка списка клиентов (sellerClientsRows: spent|orders|last|avg|name|first).
+enum ClientSort: String, CaseIterable, Identifiable {
+    case spent, orders, lastRecent, lastOld, avg, name, first
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .spent:      return "По сумме покупок"
+        case .orders:     return "По числу заказов"
+        case .lastRecent: return "Недавно заказывали"
+        case .lastOld:    return "Давно не заказывали"
+        case .avg:        return "По среднему чеку"
+        case .name:       return "По имени"
+        case .first:      return "Сначала новые клиенты"
+        }
+    }
+    /// .spent — без параметров, как раньше (сервер сам сортирует по сумме).
+    var query: (sort: String, dir: String)? {
+        switch self {
+        case .spent:      return nil
+        case .orders:     return ("orders", "desc")
+        case .lastRecent: return ("last", "desc")
+        case .lastOld:    return ("last", "asc")
+        case .avg:        return ("avg", "desc")
+        case .name:       return ("name", "asc")
+        case .first:      return ("first", "desc")
+        }
+    }
+}
+
 struct ClientsView: View {
     @StateObject private var vm = ClientsViewModel()
 
@@ -77,7 +129,8 @@ struct ClientsView: View {
             List {
                 ForEach(vm.items) { client in
                     NavigationLink {
-                        ClientDetailView(clientId: client.clientId, onChanged: { Task { await vm.load() } })
+                        ClientDetailView(clientId: client.clientId, askReason: vm.segments != nil,
+                                         onChanged: { Task { await vm.load(); await vm.loadSegments() } })
                     } label: {
                         ClientRow(client: client)
                     }
@@ -86,7 +139,10 @@ struct ClientsView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .refreshable { await vm.load() }
+            .refreshable {
+                await vm.loadSegments()
+                await vm.load()
+            }
             // Пустой ответ на поиск или сегмент читался как «Клиентов пока нет» —
             // будто клиентов у магазина нет вовсе. Под фильтром — «Никого не нашли».
             .listState(vm.state, isEmpty: vm.items.isEmpty,
@@ -94,7 +150,7 @@ struct ClientsView: View {
                        emptyTitle: isFiltered ? "Никого не нашли" : "Клиентов пока нет",
                        emptySubtitle: isFiltered ? "Измените запрос или выберите сегмент «Все»"
                                                  : "Здесь появятся все, кто оформлял заказы",
-                       retry: { Task { await vm.load() } })
+                       retry: { Task { await vm.load(); await vm.loadSegments() } })
         }
         .background(Brand.bg.ignoresSafeArea())
         .navigationTitle("Клиенты")
@@ -102,9 +158,29 @@ struct ClientsView: View {
         .searchable(text: $vm.search, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Имя, телефон или email")
         .onChange(of: vm.search) { _ in vm.searchChanged() }
+        // АY: сортировка — только когда сервер её знает (есть сводка сегментов).
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if vm.segments != nil {
+                    Menu {
+                        Picker("Сортировка", selection: $vm.sort) {
+                            ForEach(ClientSort.allCases) { s in Text(s.title).tag(s) }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel("Сортировка")
+                }
+            }
+        }
         // Возврат из карточки клиента заново тянул весь список (до 500 строк),
         // хотя после бонуса и чёрного списка его уже перечитывает onChanged.
-        .task { if vm.state != .loaded { await vm.load() } }
+        .task {
+            if vm.state != .loaded {
+                await vm.load()
+                await vm.loadSegments()
+            }
+        }
     }
 
     private var isFiltered: Bool {
@@ -114,9 +190,19 @@ struct ClientsView: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(ClientSegments.chips, id: \.1) { value, title in
-                    FilterChip(title: title, selected: vm.segment == value) {
-                        vm.segment = value
+                if let stats = vm.segments {
+                    // АY: сводка сервера — подписи с числом клиентов.
+                    ForEach(ClientSegments.chips, id: \.1) { value, title in
+                        FilterChip(title: stats.count(value).map { "\(title) (\($0))" } ?? title,
+                                   selected: vm.segment == value) {
+                            vm.segment = value
+                        }
+                    }
+                } else {
+                    ForEach(ClientSegments.chips, id: \.1) { value, title in
+                        FilterChip(title: title, selected: vm.segment == value) {
+                            vm.segment = value
+                        }
                     }
                 }
             }

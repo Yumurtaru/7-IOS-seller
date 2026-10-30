@@ -94,6 +94,33 @@ struct ClientSummary: Decodable, Identifiable {
     var clientId: Int { id ?? 0 }
 }
 
+/// АY (сайт А616): GET /api/seller/clients/segments — {all,loyal,at_risk,churned}: {count, spent}.
+/// Старый сервер ручки не знает (404) — чипы как раньше, без чисел.
+struct ClientSegmentsStats: Decodable {
+    @SRObject var all: ClientSegmentCount?
+    @SRObject var loyal: ClientSegmentCount?
+    @SRObject var atRisk: ClientSegmentCount?
+    @SRObject var churned: ClientSegmentCount?
+    enum CodingKeys: String, CodingKey {
+        case all, loyal, churned
+        case atRisk = "at_risk"
+    }
+    func count(_ segment: String?) -> Int? {
+        switch segment {
+        case nil: return all?.count
+        case "loyal": return loyal?.count
+        case "at_risk": return atRisk?.count
+        case "churned": return churned?.count
+        default: return nil
+        }
+    }
+}
+
+struct ClientSegmentCount: Decodable {
+    @LenientInt var count: Int?
+    @LenientDecimal var spent: Decimal?
+}
+
 /// GET /api/seller/clients/{id} — карточка клиента с историей и RFM.
 struct ClientDetail: Decodable {
     @LenientInt var id: Int?
@@ -533,13 +560,30 @@ struct AnalyticsMetrics: Decodable {
     @LenientInt var clients: Int?
     @LenientDecimal var avgRating: Decimal?
     @LenientInt var avgDeliveryMin: Int?
+    /// АY (сайт А616): прошлый такой же отрезок для трендов; nil — старый сервер.
+    @SRObject var prev: AnalyticsPrev?
+    /// АY: доля отмен за период, % (одна цифра после запятой). nil — старый сервер.
+    @LenientDecimal var cancelPct: Decimal?
 
     enum CodingKeys: String, CodingKey {
-        case revenue, orders, clients
+        case revenue, orders, clients, prev
         case revenueChange = "revenue_change"
         case avgCheck = "avg_check"
         case avgRating = "avg_rating"
         case avgDeliveryMin = "avg_delivery_min"
+        case cancelPct = "cancel_pct"
+    }
+}
+
+/// GET /api/seller/analytics → metrics.prev (сайт А616).
+struct AnalyticsPrev: Decodable {
+    @LenientDecimal var revenue: Decimal?
+    @LenientInt var orders: Int?
+    @LenientDecimal var avgCheck: Decimal?
+    @LenientInt var clients: Int?
+    enum CodingKeys: String, CodingKey {
+        case revenue, orders, clients
+        case avgCheck = "avg_check"
     }
 }
 
@@ -615,6 +659,10 @@ struct ForecastRow: Decodable, Identifiable {
     @LenientInt var forecast7: Int?
     @LenientInt var trendPct: Int?
     @LenientDecimal var avgWeekly: Decimal?
+    /// АY (сайт А616): прогноз на завтра, остаток (null — не ведётся) и «докупить».
+    @LenientDecimal var forecast1Qty: Decimal?
+    @LenientDecimal var stockQty: Decimal?
+    @LenientDecimal var toBuy: Decimal?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -625,6 +673,9 @@ struct ForecastRow: Decodable, Identifiable {
         case forecast7 = "forecast_7"
         case trendPct = "trend_pct"
         case avgWeekly = "avg_weekly"
+        case forecast1Qty = "forecast_1_qty"
+        case stockQty = "stock_qty"
+        case toBuy = "to_buy"
     }
     var id: String { "\(productId ?? 0)-" + (name ?? "") }
 }
@@ -651,6 +702,8 @@ struct CommissionReport: Decodable {
     @LenientDecimal var comm: Decimal?
     @LenientDecimal var fee: Decimal?
     @LenientInt var cnt: Int?
+    /// true — у сотрудника нет права «Финансы», суммы нулями. Старый сервер — nil.
+    @LenientBool var hidden: Bool?
 }
 
 struct ReportTotals: Decodable {

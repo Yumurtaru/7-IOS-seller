@@ -119,6 +119,23 @@ extension API {
         ], as: IdAck.self)
     }
 
+    /// АY (сайт А616): правка варианта — только изменённые поля (name, price, is_available).
+    /// Цена — с правом «Цены» (сервер проверяет, если цена реально меняется).
+    func updateModifierOption(id: Int, fields: [String: Any?]) async throws {
+        _ = try await putDetailed("api/seller/modifiers/\(id)", body: fields, as: EmptyData.self)
+    }
+
+    /// АY: правка группы — только изменённые поля (name, type, is_required, min_qty, max_qty).
+    func updateModifierGroup(id: Int, fields: [String: Any?]) async throws {
+        _ = try await putDetailed("api/seller/modifier-groups/\(id)", body: fields, as: EmptyData.self)
+    }
+
+    /// АY: порядок фото товара (первое — главное). 409 photos_changed — список изменился.
+    func reorderProductPhotos(productId: Int, ids: [Int]) async throws {
+        _ = try await postDetailed("api/seller/products/\(productId)/photos/reorder", body: ["ids": ids],
+                                   as: EmptyData.self)
+    }
+
     func deleteModifierOption(id: Int) async throws {
         _ = try await delete("api/seller/modifiers/\(id)", as: Phase2BoolAck.self)
     }

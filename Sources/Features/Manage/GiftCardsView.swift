@@ -200,6 +200,8 @@ struct GiftCardsView: View {
 
 private struct GiftCardRow: View {
     let card: GiftCard
+    /// Код только что скопирован — галочка вместо значка на пару секунд.
+    @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -207,6 +209,21 @@ private struct GiftCardRow: View {
                 Text(card.code ?? "—")
                     .font(.subheadline.weight(.bold).monospaced())
                     .foregroundColor(Brand.text)
+                    .textSelection(.enabled)
+                // Паритет с Android: «Копировать код» у каждой карты, а не только
+                // у только что выпущенной (клиент звонит и просит продиктовать код).
+                if let code = card.code, !code.isEmpty {
+                    Button {
+                        UIPasteboard.general.string = code
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                    } label: {
+                        Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                            .foregroundColor(copied ? Brand.green : Brand.accent)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Копировать код")
+                }
                 Spacer()
                 StatusBadge(text: card.statusTitle, color: color)
             }

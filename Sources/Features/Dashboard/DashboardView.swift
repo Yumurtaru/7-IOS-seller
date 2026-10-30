@@ -146,6 +146,8 @@ struct DashboardView: View {
                         let seeFinance = d.blocks?["finance"] ?? true
                         let seeOrders = d.blocks?["orders"] ?? true
                         if seeAnalytics { metricsGrid(d) }
+                        // АY (сайт А616): что сделать сейчас; старый сервер — блока нет.
+                        if let att = d.attention, !attentionRows(att).isEmpty { attentionCard(att) }
                         if seeFinance { walletCard(d) }
                         // А82: оплаты сегодня по способам и контроль потерь за 7 дней.
                         // Без права (403) или на старом сервере (404) блоков нет.
@@ -164,12 +166,9 @@ struct DashboardView: View {
             .navigationTitle("Дашборд")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // «Пауза / На проверке / Не опубликован» — метка под названием в
+                // ShopSwitcherMenu (на всех вкладках); отдельный бейдж паузы не нужен.
                 ToolbarItem(placement: .principal) { ShopSwitcherMenu() }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if session.shopStatus == "paused" {
-                        StatusBadge(text: "На паузе", color: Brand.amber)
-                    }
-                }
             }
             .refreshable {
                 await vm.load()
@@ -259,14 +258,24 @@ struct DashboardView: View {
 
     // ── Метрики периода ──────────────────────────────────────────────────────
     private func metricsGrid(_ d: DashboardData) -> some View {
-        HStack(spacing: 10) {
-            metric("Выручка", Money.rub(d.revenue))
-            metric("Заказы", "\(d.orders ?? 0)")
-            metric("Ср. чек", Money.rub(d.avgCheck))
+        // АY: prev — тот же отрезок прошлого периода (сайт А616); нет — без строки тренда.
+        let p = d.prev
+        return HStack(spacing: 10) {
+            metric("Выручка", Money.rub(d.revenue)) {
+                TrendText(current: d.revenue, previous: p?.revenue, format: { Money.rub($0) })
+            }
+            metric("Заказы", "\(d.orders ?? 0)") {
+                TrendText(current: Decimal(d.orders ?? 0), previous: p?.orders.map { Decimal($0) },
+                          format: { "\($0)" })
+            }
+            metric("Ср. чек", Money.rub(d.avgCheck)) {
+                TrendText(current: d.avgCheck, previous: p?.avgCheck, format: { Money.rub($0) })
+            }
         }
     }
 
-    private func metric(_ title: String, _ value: String) -> some View {
+    private func metric<Trend: View>(_ title: String, _ value: String,
+                                     @ViewBuilder trend: () -> Trend) -> some View {
         VStack(spacing: 4) {
             Text(value)
                 .font(.headline)
@@ -274,11 +283,82 @@ struct DashboardView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             Text(title).font(.caption).foregroundColor(Brand.muted)
+            trend()
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
         .background(Brand.card)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // ── Требует внимания (АY, сайт А616) ─────────────────────────────────────
+    /// Строка блока: текст и куда ведёт касание.
+    private enum AttentionTarget { case orders, reviews, wallet }
+    private struct AttentionRow: Identifiable {
+        let id: String
+        let text: String
+        let target: AttentionTarget
+    }
+
+    /// Только ненулевые; null (нет права) — строки нет.
+    private func attentionRows(_ a: DashboardAttention) -> [AttentionRow] {
+        var rows: [AttentionRow] = []
+        if let n = a.lateNew, n > 0 {
+            rows.append(AttentionRow(id: "late_new", text: "Новые без ответа дольше нормы: \(n)", target: .orders))
+        }
+        if let n = a.stuck, n > 0 {
+            rows.append(AttentionRow(id: "stuck", text: "Зависшие заказы: \(n)", target: .orders))
+        }
+        if let n = a.preordersSoon, n > 0 {
+            rows.append(AttentionRow(id: "preorders_soon", text: "Предзаказы скоро: \(n)", target: .orders))
+        }
+        if let n = a.reviewsNoReply, n > 0 {
+            rows.append(AttentionRow(id: "reviews_no_reply", text: "Отзывы без ответа: \(n)", target: .reviews))
+        }
+        if let n = a.walletLow, n > 0 {
+            rows.append(AttentionRow(id: "wallet_low", text: "Мало денег на кошельке", target: .wallet))
+        }
+        return rows
+    }
+
+    private func attentionCard(_ a: DashboardAttention) -> some View {
+        SectionCard(title: "Требует внимания") {
+            let rows = attentionRows(a)
+            ForEach(rows) { row in
+                attentionLink(row)
+                if row.id != rows.last?.id {
+                    Divider().overlay(Brand.border)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func attentionLink(_ row: AttentionRow) -> some View {
+        switch row.target {
+        case .reviews where session.can("reviews"):
+            NavigationLink { ReviewsView() } label: { attentionLabel(row.text, tappable: true) }
+                .buttonStyle(.plain)
+        case .orders where session.can("orders"):
+            Button { router.requestedTab = "orders" } label: { attentionLabel(row.text, tappable: true) }
+                .buttonStyle(.plain)
+        case .wallet where session.can("finance"):
+            Button { router.requestedTab = "wallet" } label: { attentionLabel(row.text, tappable: true) }
+                .buttonStyle(.plain)
+        default:
+            attentionLabel(row.text, tappable: false)
+        }
+    }
+
+    private func attentionLabel(_ text: String, tappable: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill").foregroundColor(Brand.amber)
+            Text(text).font(.subheadline).foregroundColor(Brand.text)
+            Spacer()
+            if tappable { Image(systemName: "chevron.right").foregroundColor(Brand.muted) }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 4)
     }
 
     // ── Кошелёк ──────────────────────────────────────────────────────────────

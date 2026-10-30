@@ -22,6 +22,18 @@ extension API {
         return try await get("api/seller/stock-documents", query: q, as: [StockDocument].self)
     }
 
+    /// А316: страница списка (page, limit; meta.has_more). Старый сервер параметры
+    /// не знает — отдаёт 200 последних без meta, тогда hasMore = false.
+    func documentsPage(type: String? = nil, status: String? = nil, page: Int,
+                       limit: Int) async throws -> (items: [StockDocument], hasMore: Bool) {
+        var q: [String: String] = ["page": String(page), "limit": String(limit)]
+        if let type, !type.isEmpty { q["type"] = type }
+        if let status, !status.isEmpty { q["status"] = status }
+        let (rows, meta) = try await getWithMeta("api/seller/stock-documents", query: q, as: [StockDocument].self)
+        let more = (meta["has_more"] as? Bool) ?? ((meta["has_more"] as? NSNumber)?.boolValue ?? false)
+        return (rows, more)
+    }
+
     func document(id: Int) async throws -> StockDocumentDetail {
         try await get("api/seller/stock-documents/\(id)", as: StockDocumentDetail.self)
     }
@@ -61,7 +73,8 @@ extension API {
         try await postKeyed("api/seller/stock-documents/\(id)/post", as: DocPostAck.self)
     }
 
-    /// Отмена проведения — сервер разворачивает движения обратно.
+    /// Отмена проведения — сервер разворачивает движения обратно. Черновик
+    /// (А316) — становится cancelled без движений ({cancelled, draft}).
     func cancelDocument(id: Int) async throws -> DocPostAck {
         try await post("api/seller/stock-documents/\(id)/cancel", as: DocPostAck.self)
     }

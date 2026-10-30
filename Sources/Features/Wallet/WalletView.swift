@@ -33,14 +33,63 @@ final class WalletViewModel: ObservableObject {
     /// Паритет с Android: обновление не удалось, а на экране прежний баланс.
     @Published var refreshError: String?
 
+    // ── АY (сайт А616): фильтр выписки, период и «Показать ещё» ─────────────
+    /// Выбранные типы операций (?type=a,b); пусто — все.
+    @Published var typeFilter: Set<String> = [] {
+        didSet { if typeFilter != oldValue { Task { await load() } } }
+    }
+    /// Период выписки (from/to); выключен — как раньше, без дат.
+    @Published var periodOn = false {
+        didSet { if periodOn != oldValue { Task { await load() } } }
+    }
+    @Published var periodFrom = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date() {
+        didSet { if periodOn && !periodInvalid && periodFrom != oldValue { Task { await load() } } }
+    }
+    @Published var periodTo = Date() {
+        didSet { if periodOn && !periodInvalid && periodTo != oldValue { Task { await load() } } }
+    }
+    @Published var loadingMore = false
+    @Published var moreError: String?
+    @Published var shareFile: ShareFile?
+    @Published var exporting = false
+    /// Ответ на прежний фильтр, пришедший позже нового, не перетирает экран.
+    private var loadGen = 0
+
+    /// Сервер подтвердил ?type=/from/to/before_id (см. WalletData.knowsTxFilters).
+    var knowsTxFilters: Bool { data?.knowsTxFilters ?? false }
+    var filterActive: Bool { !typeFilter.isEmpty || periodOn }
+
+    // Ровно тот день, что виден в DatePicker: пикер работает в поясе телефона,
+    // поэтому и дата — в поясе телефона (как выгрузка заказов в «Выгрузках»).
+    /// «С» позже «по» (по дням, как видно в пикере): период не шлём, выписку не показываем.
+    var periodInvalid: Bool { periodOn && DateFmt.ymd(periodFrom) > DateFmt.ymd(periodTo) }
+    private var fromParam: String? { periodOn && !periodInvalid ? DateFmt.ymd(periodFrom) : nil }
+    private var toParam: String? { periodOn && !periodInvalid ? DateFmt.ymd(periodTo) : nil }
+
     func load() async {
         if data == nil { state = .loading }
+        loadGen += 1
+        let myGen = loadGen
+        // Фильтр — только серверу, который его знает (первая загрузка — без него).
+        let useFilter = knowsTxFilters && filterActive
         do {
-            data = try await API.shared.wallet()
+            let fresh = try await API.shared.wallet(types: useFilter ? Array(typeFilter) : [],
+                                                    from: useFilter ? fromParam : nil,
+                                                    to: useFilter ? toParam : nil)
+            guard myGen == loadGen else { return }
+            data = fresh
+            moreError = nil
+            // Сайт откатили — фильтр сервер не применил: снимаем его, а не
+            // показываем полную выписку как отфильтрованную.
+            if !fresh.knowsTxFilters && filterActive {
+                typeFilter = []
+                periodOn = false
+            }
             state = .loaded
             refreshError = nil
         } catch is CancellationError {
         } catch {
+            guard myGen == loadGen else { return }
             // Раньше при показанных данных ошибка не выводилась нигде, и
             // продавец считал старый баланс свежим.
             if data == nil { state = .failed(error.localizedDescription) }
@@ -100,6 +149,61 @@ final class WalletViewModel: ObservableObject {
             self.error = msg
             return false
         }
+    }
+
+    /// «Показать ещё» (before_id — id последней строки), с тем же фильтром.
+    func loadMore() async {
+        guard !loadingMore, !periodInvalid, let d = data, d.knowsTxFilters, d.txHasMore == true,
+              let last = d.transactions?.last?.txId else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        moreError = nil
+        let myGen = loadGen
+        do {
+            let page = try await API.shared.wallet(types: filterActive ? Array(typeFilter) : [],
+                                                   from: fromParam, to: toParam, beforeId: last)
+            guard myGen == loadGen, var cur = data else { return }
+            // Сайт откатили: before_id и фильтр сервер не знает — снимаем фильтр
+            // и перечитываем, хвост не дописываем.
+            if !page.knowsTxFilters {
+                if filterActive { typeFilter = []; periodOn = false } else { await load() }
+                return
+            }
+            let known = Set((cur.transactions ?? []).map(\.id))
+            cur.transactions = (cur.transactions ?? []) + (page.transactions ?? []).filter { !known.contains($0.id) }
+            cur.txHasMore = page.txHasMore
+            data = cur
+        } catch is CancellationError {
+        } catch {
+            guard myGen == loadGen else { return }
+            moreError = error.localizedDescription
+        }
+    }
+
+    /// Выгрузка выписки с тем же фильтром (?type=, from/to), что на экране.
+    func export(xlsx: Bool) async {
+        guard !exporting else { return }
+        exporting = true
+        defer { exporting = false }
+        error = nil
+        do {
+            let url = try await API.shared.exportWallet(xlsx: xlsx, types: Array(typeFilter),
+                                                        from: fromParam, to: toParam)
+            shareFile = ShareFile(url: url)
+        } catch is CancellationError {
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Чипы типов: известные — в привычном порядке, остальные — по подписи.
+    static func orderedTypes(_ labels: [String: String]) -> [(code: String, label: String)] {
+        let known = ["topup", "commission", "service_fee_received", "service_fee_shop_pays",
+                     "subscription", "promo", "refund_commission", "correction"]
+        var out: [(code: String, label: String)] = known.compactMap { k in labels[k].map { (k, $0) } }
+        let rest = labels.filter { !known.contains($0.key) }.sorted { $0.value < $1.value }
+        out += rest.map { ($0.key, $0.value) }
+        return out
     }
 
     /// Ждём ответа ЮKassa примерно 5 минут. Обрыв связи отказом не считаем —
@@ -223,6 +327,9 @@ struct WalletView: View {
             }) {
                 TopupSheet(vm: vm)
             }
+            .sheet(item: $vm.shareFile) { file in
+                ShareSheet(items: [file.url])
+            }
             .sheet(item: $vm.payLink, onDismiss: { Task { await vm.checkNow() } }) { link in
                 SafariView(url: link.url).ignoresSafeArea()
             }
@@ -283,6 +390,11 @@ struct WalletView: View {
                 Text(Money.rub(d.balance))
                     .font(.system(size: 34, weight: .bold))
                     .foregroundColor(d.low == true ? Brand.red : Brand.green)
+                // АY (сайт А616): средний дневной расход за 30 дней и на сколько хватит.
+                if let avg = d.avgDailyDebit30d, avg > 0 {
+                    Text(Self.avgDebitText(avg: avg, balance: d.balance))
+                        .font(.caption).foregroundColor(Brand.muted)
+                }
                 if let plan = d.plan {
                     HStack {
                         Text("Тариф «\(plan.name ?? "—")»")
@@ -343,11 +455,75 @@ struct WalletView: View {
         }
     }
 
+    /// «В среднем списывается N ₽ в день · хватит примерно на N дн.»
+    static func avgDebitText(avg: Decimal, balance: Decimal?) -> String {
+        var text = "В среднем списывается \(Money.rub(avg)) в день"
+        if let b = balance, b > 0 {
+            let days = NSDecimalNumber(decimal: b / avg).doubleValue
+            if days.isFinite {
+                let n = Int(days.rounded(.down))
+                text += n < 1 ? " · хватит меньше чем на день" : " · хватит примерно на \(n) дн."
+            }
+        }
+        return text
+    }
+
+    /// АY: фильтр по типам, период и выгрузка — только когда сервер их знает.
+    @ViewBuilder
+    private func historyFilters(_ d: WalletData) -> some View {
+        if d.knowsTxFilters {
+            if let labels = d.typeLabels, !labels.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        FilterChip(title: "Все", selected: vm.typeFilter.isEmpty) { vm.typeFilter = [] }
+                        ForEach(WalletViewModel.orderedTypes(labels), id: \.code) { t in
+                            FilterChip(title: t.label, selected: vm.typeFilter.contains(t.code)) {
+                                var next = vm.typeFilter
+                                if next.contains(t.code) { next.remove(t.code) } else { next.insert(t.code) }
+                                vm.typeFilter = next
+                            }
+                        }
+                    }
+                }
+            }
+            Toggle("Период", isOn: $vm.periodOn)
+                .font(.subheadline)
+                .tint(Brand.accent)
+            if vm.periodOn {
+                DatePicker("С", selection: $vm.periodFrom, displayedComponents: .date)
+                    .font(.subheadline)
+                DatePicker("По", selection: $vm.periodTo, displayedComponents: .date)
+                    .font(.subheadline)
+                if vm.periodInvalid {
+                    Text("Дата «с» позже даты «по»").font(.caption).foregroundColor(Brand.red)
+                }
+            }
+            if vm.filterActive && !vm.periodInvalid {
+                Menu {
+                    Button("Excel (XLSX)") { Task { await vm.export(xlsx: true) } }
+                    Button("CSV") { Task { await vm.export(xlsx: false) } }
+                } label: {
+                    HStack(spacing: 6) {
+                        if vm.exporting { ProgressView().scaleEffect(0.8) }
+                        Label("Выгрузить по фильтру", systemImage: "square.and.arrow.up")
+                            .font(.footnote.weight(.semibold))
+                    }
+                }
+                .disabled(vm.exporting)
+            }
+        }
+    }
+
     private func historyCard(_ d: WalletData) -> some View {
         SectionCard(title: "История операций") {
+            historyFilters(d)
             let tx = d.transactions ?? []
-            if tx.isEmpty {
-                Text("Операций пока нет").font(.subheadline).foregroundColor(Brand.muted)
+            if vm.periodInvalid {
+                // Выписка под неверным периодом была бы не той, что выбрана.
+                EmptyView()
+            } else if tx.isEmpty {
+                Text(d.knowsTxFilters && vm.filterActive ? "Операций по фильтру нет" : "Операций пока нет")
+                    .font(.subheadline).foregroundColor(Brand.muted)
             } else {
                 ForEach(tx) { t in
                     HStack(alignment: .top) {
@@ -372,6 +548,25 @@ struct WalletView: View {
                     }
                     .padding(.vertical, 4)
                     if t.id != tx.last?.id { Divider().overlay(Brand.border) }
+                }
+                // АY: «Показать ещё» — по tx_has_more сервера (before_id последней строки).
+                if d.knowsTxFilters && d.txHasMore == true && tx.last?.txId != nil {
+                    Button { Task { await vm.loadMore() } } label: {
+                        HStack {
+                            Spacer()
+                            if vm.loadingMore {
+                                ProgressView().scaleEffect(0.8)
+                                Text("Загружаем…").font(.footnote.weight(.semibold))
+                            } else if let err = vm.moreError {
+                                Text("\(err) — повторить").font(.footnote.weight(.semibold))
+                                    .foregroundColor(Brand.red)
+                            } else {
+                                Text("Показать ещё").font(.footnote.weight(.semibold))
+                            }
+                            Spacer()
+                        }
+                    }
+                    .disabled(vm.loadingMore)
                 }
             }
         }

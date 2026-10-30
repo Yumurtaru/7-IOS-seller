@@ -485,7 +485,10 @@ private struct ReorderTab: View {
                                         .font(.subheadline.weight(.medium))
                                         .foregroundColor(Brand.text).lineLimit(2)
                                     Spacer()
-                                    if r.belowMin == true {
+                                    // АY (сайт А616): отрицательный остаток — отдельной меткой.
+                                    if r.negative == true {
+                                        StatusBadge(text: "Ушло в минус", color: Brand.red)
+                                    } else if r.belowMin == true {
                                         StatusBadge(text: "ниже минимума", color: Brand.red)
                                     }
                                 }
@@ -495,6 +498,11 @@ private struct ReorderTab: View {
                                     Spacer()
                                     Text("Закупить ~\(QtyFmt.qty(r.recommend)) " + (r.unit ?? ""))
                                         .font(.caption.weight(.semibold)).foregroundColor(Brand.accent)
+                                }
+                                // АY: уже заказано и не принято — учтено в «Закупить».
+                                if let t = r.inTransit, t > 0 {
+                                    Text("В пути: \(QtyFmt.qty(t)) " + (r.unit ?? ""))
+                                        .font(.caption).foregroundColor(Brand.amber)
                                 }
                                 if let s = r.supplier, !s.isEmpty {
                                     Text("Последний поставщик: " + s)

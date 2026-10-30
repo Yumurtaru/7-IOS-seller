@@ -77,6 +77,8 @@ final class PromotionEditViewModel: ObservableObject {
     @Published var name = ""
     @Published var descriptionText = ""
     @Published var isActive = true
+    /// Акция была включена при загрузке: остановить её — право «Удалять акции» (А396).
+    @Published var loadedActive = false
     @Published var hasStart = false
     @Published var startsAt = Date()
     @Published var hasEnd = false
@@ -115,6 +117,7 @@ final class PromotionEditViewModel: ObservableObject {
         name = p.name ?? ""
         descriptionText = p.description ?? ""
         isActive = p.isActive ?? false
+        loadedActive = isActive
         if let s = p.startsAt, let d = DateFmt.parse(s) { hasStart = true; startsAt = d }
         if let e = p.endsAt, let d = DateFmt.parse(e) { hasEnd = true; endsAt = d }
         priority = p.priority ?? 0
@@ -319,12 +322,22 @@ struct PromotionEditView: View {
         .interactiveDismissDisabled(vm.saving || vm.state == .loaded)
     }
 
+    private var stopLocked: Bool {
+        vm.promotionId != nil && vm.loadedActive && !Session.shared.can("promotions.delete")
+    }
+
     private var mainSection: some View {
         Section("Основное") {
             TextField("Название акции", text: $vm.name)
             TextField("Описание для клиента", text: $vm.descriptionText, axis: .vertical)
                 .lineLimit(2...4)
             Toggle("Акция включена", isOn: $vm.isActive).tint(Brand.green)
+                .disabled(stopLocked && vm.isActive)
+            if stopLocked {
+                // А396: остановка действующей акции — право «Удалять акции», иначе 403.
+                Text("Остановить действующую акцию (выключить, поставить прошедшую дату окончания или лимит не больше использованного) может владелец или сотрудник с правом «Удалять акции».")
+                    .font(.caption).foregroundColor(Brand.muted)
+            }
             Toggle("Складывается с другими", isOn: $vm.stackable).tint(Brand.accent)
             Stepper("Приоритет: \(vm.priority)", value: $vm.priority, in: 0...100)
         }

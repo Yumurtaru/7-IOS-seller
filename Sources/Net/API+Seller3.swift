@@ -200,7 +200,10 @@ extension API {
         // Приёмка — с ключом повтора (сервер: purchase_orders.receive), как документы склада:
         // повтор «Принять» после обрыва получает прежний ответ, а не второй приход.
         if !postOnly {
-            return try await postKeyed("api/seller/purchase-orders/\(id)/receive", body: body, as: ReceiveAck.self, keys: keys)
+            // detailed (А317): 422 qty_over_remaining приходит с poi_id и remaining —
+            // экран показывает текст у этой строки. Текст ошибки — тот же.
+            return try await postKeyed("api/seller/purchase-orders/\(id)/receive", body: body, as: ReceiveAck.self,
+                                       detailed: true, keys: keys)
         }
         return try await post("api/seller/purchase-orders/\(id)/receive", body: body, as: ReceiveAck.self)
     }
@@ -267,10 +270,12 @@ extension API {
     }
 
     // ── Безопасность (routes/seller_security.php) ────────────────────────────
-    /// days 1–180, action — код из labels (иначе все). Сервер отдаёт до 300 строк.
-    func securityFeed(days: Int, action: String?) async throws -> SecurityFeed {
+    /// days 1–180, action — код из labels (иначе все). Сервер отдаёт до 300 строк;
+    /// beforeId (А320) — следующая страница: записи с id меньше этого.
+    func securityFeed(days: Int, action: String?, beforeId: Int? = nil) async throws -> SecurityFeed {
         var q = ["days": String(days)]
         if let a = action, !a.isEmpty { q["action"] = a }
+        if let b = beforeId, b > 0 { q["before_id"] = String(b) }
         return try await get("api/seller/security/feed", query: q, as: SecurityFeed.self)
     }
 

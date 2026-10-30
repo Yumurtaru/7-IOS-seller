@@ -158,8 +158,13 @@ struct PromotionRow: View {
                     ))
                     .labelsHidden()
                     .tint(Brand.green)
-                    .disabled(vm.togglingId != nil)
+                    // А396: остановить действующую акцию — право «Удалять акции» (иначе 403).
+                    .disabled(vm.togglingId != nil || (promo.isActive == true && !Session.shared.can("promotions.delete")))
                 }
+            }
+            if promo.archived != true && promo.isActive == true && !Session.shared.can("promotions.delete") {
+                Text("Остановить действующую акцию может владелец или сотрудник с правом «Удалять акции».")
+                    .font(.caption2).foregroundColor(Brand.muted)
             }
             if let desc = promo.description, !desc.isEmpty {
                 Text(desc).font(.caption).foregroundColor(Brand.muted).lineLimit(2)

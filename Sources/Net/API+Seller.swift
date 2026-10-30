@@ -119,11 +119,15 @@ extension API {
     }
 
     // ── Товары (routes/seller_products.php) ──────────────────────────────────
-    func products(category: Int?, status: String?, q: String?, page: Int) async throws -> ProductsPage {
+    /// extra — АY (сайт А616): фильтры avail/stopped/nophoto/nocat/lowstock и sort/dir.
+    /// Шлём, только если сервер их знает (ProductsPage.knowsFilters); пусто — как раньше.
+    func products(category: Int?, status: String?, q: String?, page: Int,
+                  extra: [String: String] = [:]) async throws -> ProductsPage {
         var query = ["page": String(page)]
         if let c = category { query["category"] = String(c) }
         if let s = status, !s.isEmpty { query["status"] = s }
         if let text = q, !text.isEmpty { query["q"] = text }
+        for (k, v) in extra where query[k] == nil { query[k] = v }
         return try await get("api/seller/products", query: query, as: ProductsPage.self)
     }
 
@@ -157,6 +161,7 @@ extension API {
     }
 
     /// action: status(value active|hidden) | category(value id) | delete
+    /// | avail(value 0|1, АY: сайт А616; «1» снимает и стоп)
     func bulkProducts(ids: [Int], action: String, value: String?) async throws -> AffectedAck {
         try await post("api/seller/products/bulk",
                        body: ["ids": ids, "action": action, "value": value],
@@ -186,16 +191,20 @@ extension API {
     }
 
     // ── Стоп-лист ────────────────────────────────────────────────────────────
-    func stopList() async throws -> [StopListItem] {
-        try await get("api/seller/stop-list", as: [StopListItem].self)
+    func stopList() async throws -> StopListPayload {
+        try await get("api/seller/stop-list", as: StopListPayload.self)
     }
 
-    func addToStopList(productId: Int, modifierId: Int?, reason: String?, untilMinutes: Int?) async throws -> IdAck {
+    /// untilClose — АY (сайт А616): «До закрытия» по часам работы на сервере.
+    /// Только когда сервер его знает: старый сервер поставил бы бессрочный стоп.
+    func addToStopList(productId: Int, modifierId: Int?, reason: String?, untilMinutes: Int?,
+                       untilClose: Bool = false) async throws -> IdAck {
         try await post("api/seller/stop-list", body: [
             "product_id": productId,
             "modifier_id": modifierId,
             "reason": reason,
-            "until_minutes": untilMinutes,
+            "until_minutes": untilClose ? nil : untilMinutes,
+            "until_close": untilClose ? 1 : nil,
         ], as: IdAck.self)
     }
 
@@ -306,8 +315,22 @@ extension API {
     }
 
     // ── Кошелёк (routes/seller_settings.php) ─────────────────────────────────
-    func wallet() async throws -> WalletData {
-        try await get("api/seller/wallet", as: WalletData.self)
+    /// АY (сайт А616): types — ?type=a,b, from/to — «ГГГГ-ММ-ДД», beforeId — «Показать ещё».
+    /// Без параметров — как раньше (последние 100 операций). Слать — только если
+    /// сервер их знает (WalletData.knowsTxFilters): старый сервер молча игнорирует.
+    func wallet(types: [String] = [], from: String? = nil, to: String? = nil,
+                beforeId: Int? = nil) async throws -> WalletData {
+        try await get("api/seller/wallet", query: Self.walletQuery(types: types, from: from, to: to, beforeId: beforeId),
+                      as: WalletData.self)
+    }
+
+    static func walletQuery(types: [String], from: String?, to: String?, beforeId: Int? = nil) -> [String: String] {
+        var q: [String: String] = [:]
+        if !types.isEmpty { q["type"] = types.sorted().joined(separator: ",") }
+        if let f = from, !f.isEmpty { q["from"] = f }
+        if let t = to, !t.isEmpty { q["to"] = t }
+        if let b = beforeId, b > 0 { q["before_id"] = String(b) }
+        return q
     }
 
     /// method ∈ card_online | sbp | bank_transfer, минимум 100 ₽ (сервер проверяет).
@@ -377,11 +400,20 @@ extension API {
     }
 
     // ── Клиенты / RFM (routes/seller_analytics.php) ──────────────────────────
-    func clients(search: String, segment: String?) async throws -> [ClientSummary] {
+    /// sort/dir — АY (сайт А616): spent|orders|last|avg|name|first, asc|desc. nil — как раньше
+    /// (по сумме). Слать только при признаке нового сервера (ответ /clients/segments).
+    func clients(search: String, segment: String?, sort: String? = nil, dir: String? = nil) async throws -> [ClientSummary] {
         var q: [String: String] = [:]
         if !search.isEmpty { q["search"] = search }
         if let seg = segment, !seg.isEmpty { q["segment"] = seg }
+        if let s = sort, !s.isEmpty { q["sort"] = s }
+        if let d = dir, !d.isEmpty { q["dir"] = d }
         return try await get("api/seller/clients", query: q, as: [ClientSummary].self)
+    }
+
+    /// АY: сводка сегментов для чипов. Старый сервер (404/405) и любой сбой — nil.
+    func clientSegments() async -> ClientSegmentsStats? {
+        try? await getDetailed("api/seller/clients/segments", as: ClientSegmentsStats.self, retries: 0)
     }
 
     func client(id: Int) async throws -> ClientDetail {
@@ -403,10 +435,11 @@ extension API {
     }
 
     /// remove == true — убрать из чёрного списка; иначе добавить. Возвращает итоговый статус.
-    func setClientBlacklist(id: Int, remove: Bool) async throws -> BlacklistAck {
-        try await post("api/seller/clients/\(id)/blacklist",
-                       body: ["remove": remove],
-                       as: BlacklistAck.self)
+    /// reason — АY (сайт А616): необязательная причина, пишется в журнал действий.
+    func setClientBlacklist(id: Int, remove: Bool, reason: String? = nil) async throws -> BlacklistAck {
+        var body: [String: Any?] = ["remove": remove]
+        if !remove, let r = reason?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty { body["reason"] = r }
+        return try await post("api/seller/clients/\(id)/blacklist", body: body, as: BlacklistAck.self)
     }
 
     func saveClientNote(id: Int, note: String) async throws {
@@ -636,7 +669,9 @@ extension API {
 
     /// hours — массив словарей {day_of_week, open_time, close_time, is_closed}.
     func saveShopHours(_ hours: [[String: Any]]) async throws {
-        _ = try await post("api/seller/settings/hours", body: ["hours": hours], as: Phase2BoolAck.self)
+        // АY: отказ с полями (422 hours.<день>.<open_time|close_time>) — APIDetailedError,
+        // чтобы экран показал текст под строкой дня. Текст ошибки — тот же, что был.
+        _ = try await postDetailed("api/seller/settings/hours", body: ["hours": hours], as: Phase2BoolAck.self)
     }
 
     /// hours — окно возвратов в часах (сервер ограничивает 1…72).
@@ -659,9 +694,11 @@ extension API {
     }
 
     /// xlsx == true — XLSX-отчёт, иначе CSV. Возвращает URL скачанного файла.
-    func exportWallet(xlsx: Bool) async throws -> URL {
+    /// АY: types/from/to — тот же фильтр, что у выписки на экране кошелька (сайт А616).
+    func exportWallet(xlsx: Bool, types: [String] = [], from: String? = nil, to: String? = nil) async throws -> URL {
         let path = xlsx ? "api/seller/wallet/export-xlsx" : "api/seller/wallet/export"
-        return try await downloadFile(path, fallbackName: xlsx ? "wallet.xlsx" : "wallet.csv")
+        return try await downloadFile(path, query: Self.walletQuery(types: types, from: from, to: to),
+                                      fallbackName: xlsx ? "wallet.xlsx" : "wallet.csv")
     }
 }
 

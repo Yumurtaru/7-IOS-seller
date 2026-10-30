@@ -239,15 +239,49 @@ struct DashboardData: Decodable {
         get { blocksRaw?.compactMapValues { $0.wrappedValue } }
     }
     var blocksRaw: [String: LenientBool]?
+    /// АY (сайт А616): тот же отрезок прошлого периода; null — нет права «Аналитика»
+    /// или старый сервер. Битый объект — nil, остальной дашборд живёт.
+    @SRObject var prev: DashboardPrev?
+    /// АY: «Требует внимания»; поле null — нет права на раздел (строку не показываем).
+    @SRObject var attention: DashboardAttention?
 
     enum CodingKeys: String, CodingKey {
-        case period, orders, revenue, chart, active, wallet
+        case period, orders, revenue, chart, active, wallet, prev, attention
         case blocksRaw = "blocks"
         case avgCheck = "avg_check"
         case pendingCommission = "pending_commission"
         case newReviews = "new_reviews"
         case newApplications = "new_applications"
         case pendingReturns = "pending_returns"
+    }
+}
+
+/// GET /api/seller/dashboard → prev (сайт А616).
+struct DashboardPrev: Decodable {
+    @LenientInt var orders: Int?
+    @LenientDecimal var revenue: Decimal?
+    @LenientDecimal var avgCheck: Decimal?
+    var from: String?
+    var to: String?
+    enum CodingKeys: String, CodingKey {
+        case orders, revenue, from, to
+        case avgCheck = "avg_check"
+    }
+}
+
+/// GET /api/seller/dashboard → attention (сайт А616). wallet_low — 1/0.
+struct DashboardAttention: Decodable {
+    @LenientInt var lateNew: Int?
+    @LenientInt var stuck: Int?
+    @LenientInt var preordersSoon: Int?
+    @LenientInt var reviewsNoReply: Int?
+    @LenientInt var walletLow: Int?
+    enum CodingKeys: String, CodingKey {
+        case stuck
+        case lateNew = "late_new"
+        case preordersSoon = "preorders_soon"
+        case reviewsNoReply = "reviews_no_reply"
+        case walletLow = "wallet_low"
     }
 }
 
@@ -700,9 +734,34 @@ struct ProductsPage: Decodable {
     var items: [ProductSummary]
     @LenientInt var page: Int?
     @LenientBool var hasMore: Bool?
+    /// АY (сайт А616): у позиций есть stop_until или category_id — сервер знает
+    /// фильтры avail/stopped/nophoto/nocat/lowstock и sort/dir. Старый сервер — false.
+    var knowsFilters = false
     enum CodingKeys: String, CodingKey {
         case items, page
         case hasMore = "has_more"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = try c.decode([ProductSummary].self, forKey: .items)
+        _page = try c.decode(LenientInt.self, forKey: .page)
+        _hasMore = try c.decode(LenientBool.self, forKey: .hasMore)
+        let probe = (try? c.decode([ProductNewFieldsProbe].self, forKey: .items)) ?? []
+        knowsFilters = probe.contains { $0.present }
+    }
+}
+
+/// Есть ли у строки товара поля сайта А616 (ключ есть, значение может быть null).
+private struct ProductNewFieldsProbe: Decodable {
+    let present: Bool
+    enum CodingKeys: String, CodingKey {
+        case stopUntil = "stop_until"
+        case categoryId = "category_id"
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        present = c.contains(.stopUntil) || c.contains(.categoryId)
     }
 }
 
@@ -719,11 +778,22 @@ struct ProductSummary: Decodable, Identifiable {
     var category: String?
     var photo: String?
     @LenientBool var stopped: Bool?
+    // АY (сайт А616): необязательные поля; у старого сервера их нет — nil.
+    @LenientInt var categoryId: Int?
+    @LenientDouble var stockQty: Double?
+    @LenientDouble var stockMin: Double?
+    var unit: String?
+    /// Стоп до (время сервера, «Y-m-d H:i:s»); null при stopped — бессрочно.
+    var stopUntil: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, article, barcode, price, type, status, category, photo, stopped
+        case id, name, article, barcode, price, type, status, category, photo, stopped, unit
         case priceOld = "price_old"
         case isAvailable = "is_available"
+        case categoryId = "category_id"
+        case stockQty = "stock_qty"
+        case stockMin = "stock_min"
+        case stopUntil = "stop_until"
     }
     var productId: Int { id ?? 0 }
 }
@@ -835,6 +905,8 @@ struct StopListItem: Decodable, Identifiable {
     var modifierName: String?
     var until: String?
     var byName: String?
+    /// АY (сайт А616): сколько секунд осталось по часам СЕРВЕРА; null — без срока.
+    @LenientInt var untilInSec: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, reason, until
@@ -844,8 +916,30 @@ struct StopListItem: Decodable, Identifiable {
         case productName = "product_name"
         case modifierName = "modifier_name"
         case byName = "by_name"
+        case untilInSec = "until_in_sec"
     }
     var itemId: Int { id ?? 0 }
+}
+
+/// GET /api/seller/stop-list: список + признак сайта А616 (ключ until_in_sec у строк —
+/// сервер знает и until_close в POST). Пустой список признака не даёт.
+struct StopListPayload: Decodable {
+    var items: [StopListItem]
+    var knowsUntilClose = false
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        items = try c.decode([StopListItem].self)
+        let probe = (try? c.decode([StopListNewFieldsProbe].self)) ?? []
+        knowsUntilClose = probe.contains { $0.present }
+    }
+}
+
+private struct StopListNewFieldsProbe: Decodable {
+    let present: Bool
+    enum CodingKeys: String, CodingKey { case untilInSec = "until_in_sec" }
+    init(from decoder: Decoder) throws {
+        present = try decoder.container(keyedBy: CodingKeys.self).contains(.untilInSec)
+    }
 }
 
 // ── Модификаторы (GET /api/seller/products/{id}/modifiers) ───────────────────
@@ -1008,6 +1102,14 @@ struct WalletData: Decodable {
     /// (старый сервер) — прежние 100 ₽; max_topup null — верхней границы нет.
     @LenientDecimal var minTopup: Decimal?
     @LenientDecimal var maxTopup: Decimal?
+    /// АY (сайт А616): есть ли строки выписки дальше (before_id). nil — старый сервер.
+    @LenientBool var txHasMore: Bool?
+    /// АY: подписи типов операций {код: подпись} — чипы фильтра ?type=. nil — старый сервер.
+    var typeLabels: [String: String]?
+    /// АY: средний дневной расход за 30 дней; null — списаний не было.
+    @LenientDecimal var avgDailyDebit30d: Decimal?
+    /// АY: сервер знает ?type=&from=&to=&before_id= (в ответе tx_has_more или type_labels).
+    var knowsTxFilters = false
 
     enum CodingKeys: String, CodingKey {
         case balance, transactions, pending, plan, low
@@ -1015,6 +1117,9 @@ struct WalletData: Decodable {
         case blockBelow = "block_below"
         case minTopup = "min_topup"
         case maxTopup = "max_topup"
+        case txHasMore = "tx_has_more"
+        case typeLabels = "type_labels"
+        case avgDailyDebit30d = "avg_daily_debit_30d"
     }
 
     /// Минимум пополнения: с сервера, иначе 100 ₽.
@@ -1042,6 +1147,11 @@ struct WalletData: Decodable {
         _blockBelow = (try? c.decode(LenientDecimal.self, forKey: .blockBelow)) ?? LenientDecimal(wrappedValue: nil)
         _minTopup = (try? c.decode(LenientDecimal.self, forKey: .minTopup)) ?? LenientDecimal(wrappedValue: nil)
         _maxTopup = (try? c.decode(LenientDecimal.self, forKey: .maxTopup)) ?? LenientDecimal(wrappedValue: nil)
+        _txHasMore = (try? c.decode(LenientBool.self, forKey: .txHasMore)) ?? LenientBool(wrappedValue: nil)
+        _avgDailyDebit30d = (try? c.decode(LenientDecimal.self, forKey: .avgDailyDebit30d)) ?? LenientDecimal(wrappedValue: nil)
+        let labels = (try? c.decodeIfPresent(LenientStringMap.self, forKey: .typeLabels))?.wrappedValue
+        typeLabels = (labels?.isEmpty ?? true) ? nil : labels
+        knowsTxFilters = c.contains(.txHasMore) || typeLabels != nil
     }
 }
 
@@ -1051,13 +1161,21 @@ struct WalletTransaction: Decodable, Identifiable {
     @LenientDecimal var balanceAfter: Decimal?
     var description: String?
     var createdAt: String?
+    /// АY (сайт А616): id строки (для before_id) и заказ операции. Старый сервер — nil.
+    @LenientInt var txId: Int?
+    @LenientInt var orderId: Int?
 
     enum CodingKeys: String, CodingKey {
         case type, amount, description
         case balanceAfter = "balance_after"
         case createdAt = "created_at"
+        case txId = "id"
+        case orderId = "order_id"
     }
-    var id: String { (createdAt ?? "") + (type ?? "") + "\(amount ?? 0)" + (description ?? "") }
+    var id: String {
+        if let t = txId { return "tx\(t)" }
+        return (createdAt ?? "") + (type ?? "") + "\(amount ?? 0)" + (description ?? "")
+    }
 }
 
 struct PendingTopup: Decodable, Identifiable {
@@ -1150,6 +1268,9 @@ struct ReturnSummary: Decodable, Identifiable {
     var createdAt: String?
     var client: String?
     var clientPhone: String?
+    /// А111: номер дня заказа (orders.daily_number), повторяется каждый день.
+    /// У старого сервера поля нет — nil.
+    @LenientInt var orderNumber: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, type, status, client
@@ -1159,8 +1280,16 @@ struct ReturnSummary: Decodable, Identifiable {
         case refundMethod = "refund_method"
         case createdAt = "created_at"
         case clientPhone = "client_phone"
+        case orderNumber = "order_number"
     }
     var returnId: Int { id ?? 0 }
+}
+
+/// Заказ возврата, как на сайте (А111): «№301 · #17914» — номер дня (его видит
+/// покупатель) и id заказа. Без order_number (старый сервер) — как раньше, «№17914».
+func returnOrderLabel(number: Int?, orderId: Int?) -> String {
+    if let n = number, n > 0 { return "№\(n) · #\(orderId ?? 0)" }
+    return "№\(orderId ?? 0)"
 }
 
 /// GET /api/seller/returns/{id} — returns.* + items/photos/log/order_items.
@@ -1183,9 +1312,11 @@ struct ReturnDetail: Decodable {
     @LenientStringArray var photos: [String]?
     var log: [StatusLogEntry]?
     var orderItems: [ReturnOrderItem]?
+    @LenientInt var orderNumber: Int?   // А111, см. ReturnSummary
 
     enum CodingKeys: String, CodingKey {
         case id, type, status, client, items, photos, log
+        case orderNumber = "order_number"
         case orderId = "order_id"
         case reasonCode = "reason_code"
         case reasonText = "reason_text"

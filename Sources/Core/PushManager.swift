@@ -83,6 +83,9 @@ final class PushManager: ObservableObject {
     func category(forType type: String?) -> Category {
         switch type {
         case "new_order": return .newOrder
+        // А516: «Отмените заказ в кассе» (заказ отменён в Yumurta, а во внешней
+        // кассе остался) — про заказы, тумблер тот же.
+        case "pos_cancel": return .newOrder
         case "order_chat": return .chat
         default: return .other
         }

@@ -53,6 +53,19 @@ struct ForecastView: View {
                         }
                         .font(.caption)
                         .foregroundColor(Brand.muted)
+                        // АY (сайт А616): завтра, остаток (null — не ведётся) и сколько докупить.
+                        if row.forecast1Qty != nil || row.stockQty != nil || row.toBuy != nil {
+                            HStack(spacing: 10) {
+                                if let f1 = row.forecast1Qty { Text("Завтра ≈ \(QtyFmt.qty(f1))") }
+                                if let st = row.stockQty { Text("Остаток: \(QtyFmt.qty(st))") }
+                                if let tb = row.toBuy {
+                                    Text("Докупить: \(QtyFmt.qty(tb))")
+                                        .foregroundColor(tb > 0 ? Brand.amber : Brand.muted)
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                        }
                     }
                     .padding(.vertical, 3)
                     .listRowBackground(Brand.card)

@@ -196,8 +196,56 @@ extension TCModifier {
     var hasCard: Bool { (techCardId ?? 0) > 0 }
 }
 
-struct DocCreateAck: Decodable { @LenientInt var id: Int? }
-struct DocPostAck: Decodable { @LenientBool var posted: Bool?; @LenientBool var cancelled: Bool? }
+struct DocCreateAck: Decodable {
+    @LenientInt var id: Int?
+    /// А316: строки, которые проведение пропустило (блюдо, набор, услуга). nil — нет.
+    let skippedLines: DocSkippedLines?
+    enum CodingKeys: String, CodingKey { case id; case skippedLines = "skipped_lines" }
+}
+struct DocPostAck: Decodable {
+    @LenientBool var posted: Bool?
+    @LenientBool var cancelled: Bool?
+    let skippedLines: DocSkippedLines?
+    enum CodingKeys: String, CodingKey { case posted, cancelled; case skippedLines = "skipped_lines" }
+}
+
+/// А316: skipped_lines — [{product_id, name, reason: "not_stock_item"}]. Разбор
+/// мягкий: что угодно другое не роняет ответ проведения (он уже выполнен).
+struct DocSkippedLines: Decodable {
+    let names: [String]
+    let count: Int
+
+    private struct Row: Decodable {
+        let name: String?
+        enum CodingKeys: String, CodingKey { case name }
+        // Не бросает никогда: иначе элемент массива не пропускался бы.
+        init(from decoder: Decoder) throws {
+            let c = try? decoder.container(keyedBy: CodingKeys.self)
+            name = (try? c?.decodeIfPresent(String.self, forKey: .name)) ?? nil
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        var out: [String] = []
+        var n = 0
+        if var c = try? decoder.unkeyedContainer() {
+            while !c.isAtEnd {
+                guard let row = try? c.decode(Row.self) else { break }
+                n += 1
+                if let nm = row.name?.trimmingCharacters(in: .whitespacesAndNewlines), !nm.isEmpty { out.append(nm) }
+            }
+        }
+        names = out
+        count = n
+    }
+
+    /// «Пропущены: «Борщ», «Комбо» (не складская позиция)». nil — пропущенных нет.
+    var text: String? {
+        guard count > 0 else { return nil }
+        let what = names.isEmpty ? "\(count) поз." : names.map { "«\($0)»" }.joined(separator: ", ")
+        return "Пропущены: \(what) (не складская позиция)"
+    }
+}
 
 // ── Черновики строк (то, что уходит на сервер) ───────────────────────────────
 

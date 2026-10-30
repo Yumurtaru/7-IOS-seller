@@ -89,6 +89,8 @@ struct LoginView: View {
     @EnvironmentObject private var session: Session
     @FocusState private var focus: Field?
     enum Field { case login, password }
+    /// Паритет с Android: «показать пароль» — проверить набранное перед входом.
+    @State private var showPassword = false
 
     var body: some View {
         ScrollView {
@@ -132,14 +134,36 @@ struct LoginView: View {
                         .background(Brand.card)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                    SecureField("Пароль", text: $vm.password)
+                    HStack(spacing: 8) {
+                        Group {
+                            if showPassword {
+                                TextField("Пароль", text: $vm.password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                            } else {
+                                SecureField("Пароль", text: $vm.password)
+                            }
+                        }
                         .textContentType(.password)
                         .focused($focus, equals: .password)
                         .submitLabel(.go)
                         .onSubmit { Task { await vm.submit() } }
-                        .padding(14)
-                        .background(Brand.card)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        Button {
+                            let wasFocused = focus == .password
+                            showPassword.toggle()
+                            // Поле пересоздаётся — возвращаем в него курсор.
+                            if wasFocused { DispatchQueue.main.async { focus = .password } }
+                        } label: {
+                            Image(systemName: showPassword ? "eye.slash" : "eye")
+                                .foregroundColor(Brand.muted)
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(showPassword ? "Скрыть пароль" : "Показать пароль")
+                    }
+                    .padding(14)
+                    .background(Brand.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
 
                     if let error = vm.error {
                         Text(error)

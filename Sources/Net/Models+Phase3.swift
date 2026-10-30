@@ -436,14 +436,21 @@ struct ReorderRow: Decodable, Identifiable {
     @LenientDecimal var recommend: Decimal?
     @LenientBool var belowMin: Bool?
     var supplier: String?
+    /// АY (сайт А616): заказано у поставщиков и ещё не принято; id последнего
+    /// поставщика; остаток ушёл в минус. Старый сервер — nil.
+    @LenientDecimal var inTransit: Decimal?
+    @LenientInt var supplierId: Int?
+    @LenientBool var negative: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case kind, name, article, unit, supplier, recommend
+        case kind, name, article, unit, supplier, recommend, negative
         case itemId = "id"
         case stockQty = "stock_qty"
         case stockMin = "stock_min"
         case avgDaily = "avg_daily"
         case belowMin = "below_min"
+        case inTransit = "in_transit"
+        case supplierId = "supplier_id"
     }
     var id: String { (kind ?? "?") + "-\(itemId ?? 0)" }
 }
@@ -832,19 +839,29 @@ enum CourierPerms {
 //  БЕЗОПАСНОСТЬ (routes/seller_security.php)
 // ════════════════════════════════════════════════════════════════════════════
 
-/// GET /api/seller/security/feed — {items, labels, enabled}.
+/// GET /api/seller/security/feed — {items, labels, enabled, has_more, next_before_id}.
+/// А320: по 300 записей; has_more и next_before_id (→ ?before_id=) — следующая
+/// страница. Старый сервер их не шлёт — nil, листания с сервера нет.
 struct SecurityFeed: Decodable {
     var items: [AuditEntry]?
     var labels: [String: String]?
     @LenientBool var enabled: Bool?
+    @LenientBool var hasMore: Bool?
+    @LenientInt var nextBeforeId: Int?
 
-    enum CodingKeys: String, CodingKey { case items, labels, enabled }
+    enum CodingKeys: String, CodingKey {
+        case items, labels, enabled
+        case hasMore = "has_more"
+        case nextBeforeId = "next_before_id"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         items = (try? c.decodeIfPresent([AuditEntry].self, forKey: .items)) ?? []
         labels = (try? c.decodeIfPresent([String: String].self, forKey: .labels)) ?? [:]
         _enabled = try c.decode(LenientBool.self, forKey: .enabled)
+        _hasMore = try c.decode(LenientBool.self, forKey: .hasMore)
+        _nextBeforeId = try c.decode(LenientInt.self, forKey: .nextBeforeId)
     }
 }
 

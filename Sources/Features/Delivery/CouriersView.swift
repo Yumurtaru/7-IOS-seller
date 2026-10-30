@@ -57,7 +57,10 @@ final class CouriersViewModel: ObservableObject {
             // Сервер молча не меняет имя чужого аккаунта (name_skipped) — раньше
             // экран закрывался как будто всё сохранено, а имя оставалось прежним.
             if nameSkipped {
-                error = "Права сохранены, но имя не изменено: курьер входит своим аккаунтом Yumurta — имя меняет он сам."
+                // А116: имя от сотрудника (не владельца) сервер тоже не сохраняет.
+                error = Session.shared.isOwner
+                    ? "Права сохранены, но имя не изменено: курьер входит своим аккаунтом Yumurta — имя меняет он сам."
+                    : "Права сохранены. Имя может менять только владелец."
             }
             return true
         } catch {
@@ -239,9 +242,13 @@ struct CourierEditSheet: View {
                     if foreign {
                         Text("Курьер входит своим аккаунтом Yumurta — имя и пароль меняет только он сам. Здесь можно поменять права.")
                             .font(.caption).foregroundColor(Brand.muted)
+                    } else if notOwner {
+                        // А116: имя и пароль существующего курьера меняет только владелец (403 / name_skipped).
+                        Text("Имя может менять только владелец. Пароль курьера меняет только владелец организации. Здесь можно поменять права.")
+                            .font(.caption).foregroundColor(Brand.muted)
                     }
                     TextField("Имя *", text: $name)
-                        .disabled(foreign)
+                        .disabled(foreign || notOwner)
                     if courier == nil {
                         TextField("Телефон (логин) *", text: $phone.phoneInput).keyboardType(.phonePad)
                     } else {
@@ -249,7 +256,7 @@ struct CourierEditSheet: View {
                     }
                     // Сервер требует от 6 символов (seller_couriers.php: «Минимум 6 символов»),
                     // а приложение пускало 4–5 и получало отказ после нажатия.
-                    if !foreign {
+                    if !foreign && !notOwner {
                         SecureField(courier == nil ? "Пароль (мин. 6 символов, если у номера ещё нет аккаунта Yumurta) *" : "Новый пароль (не менять — пусто)",
                                     text: $password)
                     }
@@ -297,9 +304,11 @@ struct CourierEditSheet: View {
 
     /// Курьер со своим аккаунтом Yumurta (сервер: account_owned = false).
     private var foreign: Bool { courier?.accountOwned == false }
+    /// Сотрудник (не владелец) правит существующего курьера: только права (А116).
+    private var notOwner: Bool { courier != nil && !Session.shared.isOwner }
 
     private var isValid: Bool {
-        if foreign { return true }   // правим только права
+        if foreign || notOwner { return true }   // правим только права
         let n = !name.trimmingCharacters(in: .whitespaces).isEmpty
         if courier == nil {
             return n && !phone.trimmingCharacters(in: .whitespaces).isEmpty && password.count >= 6
@@ -309,7 +318,7 @@ struct CourierEditSheet: View {
 
     /// Причина серой «Сохранить» — те же условия, что в isValid.
     private var invalidReason: String? {
-        if foreign { return nil }
+        if foreign || notOwner { return nil }
         if name.trimmingCharacters(in: .whitespaces).isEmpty { return "Укажите имя курьера" }
         if courier == nil && phone.trimmingCharacters(in: .whitespaces).isEmpty { return "Укажите телефон — это логин курьера" }
         if courier == nil && password.count < 6 { return "Пароль — мин. 6 символов (если у номера ещё нет аккаунта Yumurta)" }
@@ -336,7 +345,8 @@ struct CourierEditSheet: View {
             // на каждое сохранение прав отвечал бы «имя не изменено».
             let newName = name.trimmingCharacters(in: .whitespaces)
             // Чужому аккаунту имя и пароль не шлём: сервер их не меняет (пароль — 422).
-            let foreignAcc = c.accountOwned == false
+            // Сотрудник (не владелец) — тоже: имя сервер не сохранит, пароль — 403 (А116).
+            let foreignAcc = c.accountOwned == false || !Session.shared.isOwner
             ok = await vm.update(id: c.id, name: (foreignAcc || newName == (c.name ?? "")) ? nil : name,
                                  password: (foreignAcc || password.isEmpty) ? nil : password,
                                  permissions: Array(perms) + [CourierPerms.listMarker])

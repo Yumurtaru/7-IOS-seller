@@ -65,6 +65,7 @@ struct AnalyticsView: View {
                     sourcesCard(d)
                     topCard(d)
                     linksCard
+                    deepReportsCard(d.metrics?.prev != nil)
                 }
             }
             .padding(.horizontal, 16)
@@ -92,7 +93,10 @@ struct AnalyticsView: View {
                     Text(Money.rub(m.revenue)).font(.title3.weight(.bold)).foregroundColor(Brand.text)
                 }
                 Spacer()
-                if let change = m.revenueChange {
+                // АY (сайт А616): тренд к прошлому отрезку — как на главной.
+                if let p = m.prev {
+                    TrendText(current: m.revenue, previous: p.revenue, format: { Money.rub($0) })
+                } else if let change = m.revenueChange {
                     let up = change >= 0
                     // Запятая и «−», как у денег рядом: было «+12.5%» / «-3.0%» с точкой.
                     let v = NSDecimalNumber(decimal: change).doubleValue
@@ -103,9 +107,17 @@ struct AnalyticsView: View {
                 }
             }
             HStack(spacing: 10) {
-                metric("Заказы", "\(m.orders ?? 0)")
-                metric("Ср. чек", Money.rub(m.avgCheck))
-                metric("Клиенты", "\(m.clients ?? 0)")
+                metric("Заказы", "\(m.orders ?? 0)") {
+                    TrendText(current: Decimal(m.orders ?? 0), previous: m.prev?.orders.map { Decimal($0) },
+                              format: { "\($0)" })
+                }
+                metric("Ср. чек", Money.rub(m.avgCheck)) {
+                    TrendText(current: m.avgCheck, previous: m.prev?.avgCheck, format: { Money.rub($0) })
+                }
+                metric("Клиенты", "\(m.clients ?? 0)") {
+                    TrendText(current: Decimal(m.clients ?? 0), previous: m.prev?.clients.map { Decimal($0) },
+                              format: { "\($0)" })
+                }
             }
             HStack(spacing: 10) {
                 // П-23.14: 0 у рейтинга и времени доставки = «нет данных», а не «0,0 ★»/«0 мин».
@@ -114,6 +126,11 @@ struct AnalyticsView: View {
                 // «4,5 ★», а не «4.5 ★».
                 metric("Рейтинг", rating > 0 ? Self.oneDecimal(rating) + " ★" : "нет данных")
                 metric("Доставка", delivery > 0 ? "\(delivery) мин" : "нет данных")
+            }
+            // АY: доля отмен за период (сайт А616); старый сервер — строки нет.
+            if let c = m.cancelPct {
+                Text("Отмены: " + QtyFmt.percent(c))
+                    .font(.caption).foregroundColor(c > 0 ? Brand.amber : Brand.muted)
             }
         }
     }
@@ -125,10 +142,16 @@ struct AnalyticsView: View {
     }
 
     private func metric(_ title: String, _ value: String) -> some View {
+        metric(title, value) { EmptyView() }
+    }
+
+    private func metric<Trend: View>(_ title: String, _ value: String,
+                                     @ViewBuilder trend: () -> Trend) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.bold)).foregroundColor(Brand.text)
                 .lineLimit(1).minimumScaleFactor(0.6)
             Text(title).font(.caption2).foregroundColor(Brand.muted)
+            trend()
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -309,6 +332,31 @@ struct AnalyticsView: View {
             }
         }
         .foregroundColor(Brand.text)
+    }
+
+    /// АY (сайт А616): новые отчёты — только у нового сервера; если ручки всё же
+    /// нет (404/405) — экран пишет «Доступно после обновления сайта».
+    @ViewBuilder
+    private func deepReportsCard(_ show: Bool) -> some View {
+        if show {
+        SectionCard(title: "Подробные разборы") {
+            NavigationLink { AbcAnalysisView() } label: {
+                Label("ABC/XYZ-анализ", systemImage: "square.grid.3x3")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider().overlay(Brand.border)
+            NavigationLink { CohortsView() } label: {
+                Label("Возвращаются ли покупатели", systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider().overlay(Brand.border)
+            NavigationLink { BasketView() } label: {
+                Label("Покупают вместе", systemImage: "cart")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .foregroundColor(Brand.text)
+        }
     }
 }
 

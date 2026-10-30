@@ -194,7 +194,7 @@ struct ReturnDetailView: View {
                 Spacer()
                 Text(DateFmt.short(r.createdAt)).font(.caption).foregroundColor(Brand.muted)
             }
-            InfoRow(label: "Заказ", value: "№\(r.orderId ?? 0)")
+            InfoRow(label: "Заказ", value: returnOrderLabel(number: r.orderNumber, orderId: r.orderId))
             InfoRow(label: "Тип", value: r.type == "partial" ? "Частичный" : "Полный")
             InfoRow(label: "Сумма к возврату", value: Money.rub(r.refundAmount))
             InfoRow(label: "Способ", value: r.refundMethod == "manual" ? "Ручной возврат" : "Бонусами")

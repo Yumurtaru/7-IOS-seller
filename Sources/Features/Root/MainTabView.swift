@@ -172,8 +172,60 @@ struct MainTabView: View {
 /// GET /api/seller/shops → POST /api/seller/switch-shop → перезагрузка данных.
 struct ShopSwitcherMenu: View {
     @EnvironmentObject var session: Session
+    /// Чек-лист публикации по метке «Не опубликован ›» (паритет с Android).
+    @State private var showPublish = false
 
     var body: some View {
+        VStack(spacing: 1) {
+            switcher
+            // Паритет с Android: состояние организации видно в шапке КАЖДОГО
+            // раздела, а не только бейджем «На паузе» на Дашборде.
+            if let label = stateLabel {
+                if canPublish {
+                    Button { showPublish = true } label: {
+                        Text(label + " ›")
+                            .font(.caption2.weight(.bold))
+                            .foregroundColor(stateColor)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(label + ", открыть чек-лист публикации")
+                } else {
+                    Text(label)
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(stateColor)
+                }
+            }
+        }
+        .sheet(isPresented: $showPublish) { ShopPublishSheet() }
+    }
+
+    /// Те же подписи, что в шапке Android (Nav.kt): статусы панели на сервере
+    /// active / paused / draft / review (pending, blocked — на всякий случай).
+    private var stateLabel: String? {
+        switch session.shopStatus {
+        case "paused": return "Пауза"
+        case "review", "pending": return "На проверке"
+        case "draft": return "Не опубликован"
+        case "blocked": return "Заблокирован"
+        default: return nil
+        }
+    }
+
+    private var stateColor: Color {
+        switch session.shopStatus {
+        case "paused", "review", "pending": return Brand.amber
+        default: return Brand.red
+        }
+    }
+
+    /// Новая организация или на проверке: по метке — чек-лист и «Отправить на
+    /// проверку». Без права «Настройки» сервер ответит 403 — метка просто текст.
+    private var canPublish: Bool {
+        (session.shopStatus == "draft" || session.shopStatus == "review") && session.can("settings")
+    }
+
+    @ViewBuilder
+    private var switcher: some View {
         if session.shops.count > 1 {
             Menu {
                 ForEach(session.shops) { shop in
@@ -212,7 +264,8 @@ struct ShopSwitcherMenu: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(Brand.muted)
                     .lineLimit(1)
-                if !session.isOwner {
+                // Три строки в шапке не помещаются: при метке состояния роль не пишем.
+                if !session.isOwner && stateLabel == nil {
                     Text([session.staffName, session.roleName].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption2)
                         .foregroundColor(Brand.muted)
@@ -224,6 +277,15 @@ struct ShopSwitcherMenu: View {
 
     private func shopTitle(_ shop: ShopSummary) -> String {
         var t = shop.name ?? "Организация"
+        // Паритет с Android (П-27.13): тип точки — владельцу нескольких точек видно,
+        // где магазин, а где кафе или жильё. Старый сервер type не шлёт — подписи нет.
+        switch shop.type {
+        case "shop": t += " · магазин"
+        case "cafe": t += " · кафе"
+        case "service": t += " · услуги"
+        case "lodging": t += " · жильё"
+        default: break
+        }
         if let city = shop.city, !city.isEmpty {
             t += " · \(city)"
         }

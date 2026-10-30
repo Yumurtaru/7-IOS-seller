@@ -108,6 +108,9 @@ final class PromoCodesViewModel: ObservableObject {
 struct PromoCodesView: View {
     @StateObject private var vm = PromoCodesViewModel()
     @State private var showCreate = false
+    /// Паритет с Android: удаление промокода — только после вопроса (раньше
+    /// кнопка в свайпе удаляла код, уже розданный клиентам, сразу).
+    @State private var deleteTarget: PromoCode?
 
     var body: some View {
         List {
@@ -128,7 +131,7 @@ struct PromoCodesView: View {
                         // Удаление промокода — то же право, что архивация акции.
                         if Session.shared.can("promotions.delete") {
                             Button(role: .destructive) {
-                                Task { await vm.delete(promo) }
+                                deleteTarget = promo
                             } label: {
                                 Label("Удалить", systemImage: "trash")
                             }
@@ -151,6 +154,23 @@ struct PromoCodesView: View {
                 // Ошибка прошлого удаления не должна всплывать в новом окне создания.
                 Button { vm.error = nil; showCreate = true } label: { Image(systemName: "plus") }
             }
+        }
+        .confirmationDialog(
+            "Удалить промокод?",
+            isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
+            titleVisibility: .visible,
+            presenting: deleteTarget
+        ) { promo in
+            Button("Удалить «\(promo.code ?? "промокод")»", role: .destructive) {
+                let p = promo
+                deleteTarget = nil
+                Task { await vm.delete(p) }
+            }
+            Button("Отмена", role: .cancel) { deleteTarget = nil }
+        } message: { promo in
+            Text((promo.usedCount ?? 0) > 0
+                 ? "Кодом уже пользовались — он будет выключен, а история заказов сохранится."
+                 : "Код перестанет действовать для клиентов.")
         }
         .sheet(isPresented: $showCreate) { PromoCodeCreateSheet(vm: vm) }
         .task { await vm.load() }

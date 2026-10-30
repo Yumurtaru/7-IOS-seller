@@ -97,7 +97,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // Push адресован другому пользователю (data.user_id, токен остался
             // от прежнего аккаунта на этом телефоне) — не показываем его плашку.
             if DeepLinkRouter.shared.isForeign(info) { completionHandler([]); return }
-            if category == .newOrder {
+            // pos_cancel — тоже категория заказов, но это не новый заказ: без
+            // «кассового» звонка, обычная плашка со звуком (ниже).
+            if category == .newOrder && (info["type"] as? String) != "pos_cancel" {
                 // Новый заказ звенит поллер (свой «кассовый» сигнал) — звук
                 // из push повторял бы его. Звонок теперь по самому push, а не
                 // только по росту счётчика активного магазина (см. announcePushedOrder).

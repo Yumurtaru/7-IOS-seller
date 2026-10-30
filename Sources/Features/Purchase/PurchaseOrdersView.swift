@@ -134,6 +134,8 @@ final class PurchaseOrderDetailViewModel: ObservableObject {
     @Published var error: String?
     @Published var acting = false
     @Published var receiveResult: String?
+    /// А317: 422 qty_over_remaining — строка заказа (poi_id) и текст сервера (с остатком).
+    @Published var receiveLineError: (poiId: Int, text: String)?
 
     func load(id: Int) async {
         if detail == nil { state = .loading }
@@ -185,6 +187,7 @@ final class PurchaseOrderDetailViewModel: ObservableObject {
         // Второй запрос приёмки проводил второй приход — остатки удваивались.
         guard !acting else { return false }
         error = nil
+        receiveLineError = nil
         acting = true
         defer { acting = false }
         do {
@@ -200,6 +203,13 @@ final class PurchaseOrderDetailViewModel: ObservableObject {
             receiveResult = text
             await load(id: id)
             return true
+        } catch let e as APIDetailedError where e.status == 422 && e.extras["error_code"] == "qty_over_remaining"
+                    && Int(e.extras["poi_id"] ?? "") != nil {
+            // А317: больше остатка по строке — текст сервера (с остатком) у этой строки
+            // окна приёмки; приёмка не прошла, исход известен.
+            // Только у строки — без общего дубля внизу окна.
+            receiveLineError = (Int(e.extras["poi_id"] ?? "") ?? 0, e.message)
+            return false
         } catch {
             let msg = error.localizedDescription
             self.error = msg
@@ -808,6 +818,10 @@ struct ReceiveSheet: View {
                                     TextField("Кол-во", text: $line.qtyText)
                                         .keyboardType(.decimalPad)
                                         .textFieldStyle(.roundedBorder)
+                                        // Поправили количество — текст ошибки строки убираем.
+                                        .onChange(of: line.qtyText) { _ in
+                                            if vm.receiveLineError?.poiId == line.id { vm.receiveLineError = nil }
+                                        }
                                     TextField("Цена, ₽", text: $line.priceText)
                                         .keyboardType(.decimalPad)
                                         .textFieldStyle(.roundedBorder)
@@ -832,6 +846,10 @@ struct ReceiveSheet: View {
                                         .font(.caption)
                                         .buttonStyle(.borderless)
                                 }
+                            }
+                            // А317: сервер не принял больше остатка — его текст у этой строки.
+                            if let le = vm.receiveLineError, le.poiId == line.id {
+                                Text(le.text).font(.caption).foregroundColor(Brand.red)
                             }
                         }
                         .padding(.vertical, 2)

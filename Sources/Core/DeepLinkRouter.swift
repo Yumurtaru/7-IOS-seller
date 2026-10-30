@@ -158,7 +158,8 @@ final class DeepLinkRouter: ObservableObject {
         // А58/П-21.1: «курьер не смог доставить» (order_returned), отмена заказа
         // и сбой передачи на кассу — тоже про конкретный заказ: открываем его.
         // Раньше такие push просто открывали приложение.
-        case "new_order", "order_returned", "order_cancelled", "pos_failed", "pos_rejected":
+        // А516: pos_cancel «Отмените заказ в кассе» — карточка этого заказа.
+        case "new_order", "order_returned", "order_cancelled", "pos_failed", "pos_rejected", "pos_cancel":
             openOrderId = orderId
             requestedTab = "orders"
         case "order_chat":

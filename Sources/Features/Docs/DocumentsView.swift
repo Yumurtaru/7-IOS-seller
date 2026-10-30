@@ -17,25 +17,77 @@ final class DocumentsViewModel: ObservableObject {
     /// позже нового, раньше перетирал экран данными не того фильтра.
     private var loadGen = 0
     @Published var error: String?
+    /// Сообщение об успехе с оговоркой (пропущенные строки при проведении, А316).
+    @Published var notice: String?
     @Published var busyId: Int?
+    // А316: список страницами (page/limit, meta.has_more). Старый сервер — одна страница.
+    private static let pageSize = 50
+    private var page = 1
+    @Published private(set) var hasMore = false
+    @Published private(set) var loadingMore = false
+    @Published var moreError: String?
     @Published var typeFilter: String? { didSet { if typeFilter != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } } }
     @Published var statusFilter: String? { didSet { if statusFilter != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } } }
 
     static let statusChips: [(String?, String)] = [(nil, "Все"), ("draft", "Черновики"), ("posted", "Проведённые")]
 
-    func load() async {
+    /// keepPages: перечитать уже загруженные страницы (после действия над
+    /// документом), а не откатываться к первой. Не больше 5 страниц за раз.
+    func load(keepPages: Bool = false) async {
         loadGen += 1
         let myGen = loadGen
+        moreError = nil
         if items.isEmpty { state = .loading }
         do {
-            let fresh = try await API.shared.documents(type: typeFilter, status: statusFilter)
-            guard myGen == loadGen else { return }
-            items = fresh
+            let upTo = keepPages ? min(max(1, page), 5) : 1
+            var all: [StockDocument] = []
+            var more = false
+            var p = 0
+            while p < upTo {
+                p += 1
+                let r = try await API.shared.documentsPage(type: typeFilter, status: statusFilter,
+                                                           page: p, limit: Self.pageSize)
+                guard myGen == loadGen else { return }
+                all += r.items
+                more = r.hasMore
+                if !more { break }
+            }
+            var seen = Set<Int>()
+            items = all.filter { seen.insert($0.docId).inserted }
+            page = max(1, p)
+            hasMore = more
             state = .loaded
         } catch is CancellationError {
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Следующая страница — по прокрутке до последней строки.
+    func loadMoreIfNeeded(current: StockDocument) async {
+        guard hasMore, !loadingMore, current.docId == items.last?.docId else { return }
+        await loadMore()
+    }
+
+    func loadMore() async {
+        guard hasMore, !loadingMore else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        let myGen = loadGen
+        moreError = nil
+        do {
+            let r = try await API.shared.documentsPage(type: typeFilter, status: statusFilter,
+                                                       page: page + 1, limit: Self.pageSize)
+            guard myGen == loadGen else { return }
+            page += 1
+            let known = Set(items.map(\.docId))
+            items += r.items.filter { !known.contains($0.docId) }
+            hasMore = r.hasMore
+        } catch is CancellationError {
+        } catch {
+            guard myGen == loadGen else { return }
+            moreError = error.localizedDescription
         }
     }
 
@@ -45,30 +97,35 @@ final class DocumentsViewModel: ObservableObject {
     func post(_ d: StockDocument) async {
         guard busyId == nil else { return }
         busyId = d.docId; defer { busyId = nil }
-        do { _ = try await API.shared.postDocument(id: d.docId); await load() }
+        do {
+            let ack = try await API.shared.postDocument(id: d.docId)
+            // А316: проведение пропустило блюда, наборы, услуги — называем их.
+            notice = ack.skippedLines?.text
+            await load(keepPages: true)
+        }
         catch {
             self.error = error.localizedDescription
             // Отказ «уже проведён/удалён» (другое устройство) или обрыв связи, когда
             // сервер успел провести: перечитываем, иначе строка оставалась
             // «Черновиком» с кнопкой «Провести», которая снова давала ошибку.
-            await load()
+            await load(keepPages: true)
         }
     }
 
     func cancel(_ d: StockDocument) async {
         guard busyId == nil else { return }
         busyId = d.docId; defer { busyId = nil }
-        do { _ = try await API.shared.cancelDocument(id: d.docId); await load() }
+        do { _ = try await API.shared.cancelDocument(id: d.docId); await load(keepPages: true) }
         catch {
             self.error = error.localizedDescription
-            await load()   // то же для отмены проведения
+            await load(keepPages: true)   // то же для отмены проведения и черновика
         }
     }
 
     func duplicate(_ d: StockDocument) async {
         guard busyId == nil else { return }
         busyId = d.docId; defer { busyId = nil }
-        do { _ = try await API.shared.duplicateDocument(id: d.docId); await load() }
+        do { _ = try await API.shared.duplicateDocument(id: d.docId); await load(keepPages: true) }
         catch { self.error = error.localizedDescription }
     }
 }
@@ -78,6 +135,8 @@ struct DocumentsView: View {
     @State private var creating: DocType?
     @State private var openDoc: StockDocument?
     @State private var cancelTarget: StockDocument?
+    /// А316: отмена черновика (status → cancelled, без движений) — с вопросом.
+    @State private var draftCancelTarget: StockDocument?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -135,12 +194,36 @@ struct DocumentsView: View {
                             Button("Копия") { Task { await vm.duplicate(d) } }
                                 .font(.caption.weight(.semibold))
                                 .buttonStyle(.borderless)
+                            // А316: черновик можно отменить — право то же, что у отмены проведения.
+                            if !d.isPosted && d.status != "cancelled" && Session.shared.can("documents.cancel") {
+                                Button("Отменить черновик") { draftCancelTarget = d }
+                                    .font(.caption.weight(.semibold))
+                                    .buttonStyle(.borderless)
+                                    .foregroundColor(Brand.red)
+                            }
                         }
                         // Пока идёт действие по любому документу, кнопки остальных тоже
                         // неактивны: нажатие на них молча отбрасывалось.
                         .disabled(vm.busyId != nil)
                     }
                     .padding(.vertical, 2)
+                    .listRowBackground(Brand.card)
+                    .task { await vm.loadMoreIfNeeded(current: d) }
+                }
+                if vm.loadingMore {
+                    HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Brand.card)
+                } else if let err = vm.moreError, !vm.items.isEmpty {
+                    Button { Task { await vm.loadMore() } } label: {
+                        Text("Не загрузилось: \(err) · Повторить")
+                            .font(.footnote.weight(.semibold)).foregroundColor(Brand.red)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .listRowBackground(Brand.card)
+                } else if vm.hasMore {
+                    Button { Task { await vm.loadMore() } } label: {
+                        Text("Показать ещё").font(.footnote.weight(.semibold)).foregroundColor(Brand.accent)
+                            .frame(maxWidth: .infinity)
+                    }
                     .listRowBackground(Brand.card)
                 }
             }
@@ -168,7 +251,13 @@ struct DocumentsView: View {
         // состояние осталось .loading, и при возврате спиннер висел навсегда.
         .task { if vm.state != .loaded { await vm.load() } }
         .sheet(item: $creating) { t in
-            NavigationStack { DocumentEditView(type: t) { Task { await vm.load() } } }
+            NavigationStack {
+                DocumentEditView(type: t, onSaved: { Task { await vm.load() } },
+                                 // Окно ещё закрывается — сообщение показываем после него.
+                                 onNotice: { text in
+                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { vm.notice = text }
+                                 })
+            }
         }
         .sheet(item: $openDoc) { d in
             NavigationStack { DocumentDetailView(docId: d.docId) }
@@ -187,6 +276,23 @@ struct DocumentsView: View {
         } message: { _ in
             Text("Движения документа по складу будут развёрнуты обратно — остатки изменятся.")
         }
+        .confirmationDialog(
+            "Отменить черновик?",
+            isPresented: Binding(get: { draftCancelTarget != nil }, set: { if !$0 { draftCancelTarget = nil } }),
+            titleVisibility: .visible,
+            presenting: draftCancelTarget
+        ) { d in
+            Button("Отменить черновик", role: .destructive) {
+                draftCancelTarget = nil
+                Task { await vm.cancel(d) }
+            }
+            Button("Не отменять", role: .cancel) { draftCancelTarget = nil }
+        } message: { _ in
+            Text("Черновик станет «Отменён» — провести его будет нельзя. Остатки не меняются.")
+        }
+        .alert("Готово", isPresented: Binding(get: { vm.notice != nil && vm.error == nil }, set: { if !$0 { vm.notice = nil } })) {
+            Button("Понятно", role: .cancel) { vm.notice = nil }
+        } message: { Text(vm.notice ?? "") }
         .alert("Не получилось", isPresented: Binding(get: { vm.error != nil }, set: { if !$0 { vm.error = nil } })) {
             Button("Понятно", role: .cancel) { vm.error = nil }
         } message: { Text(vm.error ?? "") }

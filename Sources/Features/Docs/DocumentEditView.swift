@@ -30,6 +30,8 @@ final class DocumentEditViewModel: ObservableObject {
     /// вышло (сервер: 403 «сохранён черновиком» / 409 «не удалось провести»).
     /// Повторное «Готово» создало бы второй документ — кнопку закрываем.
     @Published var draftSaved = false
+    /// А316: «Пропущены: … (не складская позиция)» после проведения; nil — нет.
+    var skippedNotice: String?
     /// Паритет с Android: инвентаризация — «По учёту» взят из остатка склада на
     /// момент добавления строки; сменили склад — у старых строк он прежний.
     @Published var planStale = false
@@ -384,13 +386,14 @@ final class DocumentEditViewModel: ObservableObject {
         }
         let no = docFieldsOn ? String(supplierDocNo.trimmingCharacters(in: .whitespaces).prefix(64)) : ""
         do {
-            _ = try await API.shared.createDocument(
+            let ack = try await API.shared.createDocument(
                 type: type, warehouseId: warehouseId, warehouseToId: warehouseToId,
                 supplierId: supplierId, comment: comment, post: post, items: out,
                 supplierDocNo: no.isEmpty ? nil : no,
                 supplierDocDate: no.isEmpty ? nil : DateFmt.ymd(supplierDocDate),
                 keys: idemKeys
             )
+            skippedNotice = post ? ack.skippedLines?.text : nil
             pendingPost = nil
             return true
         } catch let e as APIDetailedError {
@@ -451,6 +454,8 @@ final class DocumentEditViewModel: ObservableObject {
 struct DocumentEditView: View {
     let type: DocType
     var onSaved: () -> Void = {}
+    /// А316: текст для списка после проведения (пропущенные строки).
+    var onNotice: (String) -> Void = { _ in }
 
     @StateObject private var vm: DocumentEditViewModel
     @State private var searching = false
@@ -458,10 +463,18 @@ struct DocumentEditView: View {
     @State private var confirmPost = false
     @Environment(\.dismiss) private var dismiss
 
-    init(type: DocType, onSaved: @escaping () -> Void = {}) {
+    init(type: DocType, onSaved: @escaping () -> Void = {}, onNotice: @escaping (String) -> Void = { _ in }) {
         self.type = type
         self.onSaved = onSaved
+        self.onNotice = onNotice
         _vm = StateObject(wrappedValue: DocumentEditViewModel(type: type))
+    }
+
+    /// Документ создан и проведён: список перечитать, пропущенные строки — назвать.
+    private func finishPosted() {
+        if let n = vm.skippedNotice { onNotice(n) }
+        onSaved()
+        dismiss()
     }
 
     var body: some View {
@@ -704,7 +717,7 @@ struct DocumentEditView: View {
                             if vm.postNeedsConfirm {
                                 confirmPost = true
                             } else {
-                                Task { if await vm.save(post: true) { onSaved(); dismiss() } }
+                                Task { if await vm.save(post: true) { finishPosted() } }
                             }
                         }
                         // А99: без закупочной цены приход не проводим (черновик — можно).
@@ -719,7 +732,7 @@ struct DocumentEditView: View {
         // А99: проба приёмки — параллельно со складами (старый сервер — ничего не меняется).
         .task { await vm.loadReceiptProbe() }
         .alert("Провести приход?", isPresented: $confirmPost) {
-            Button("Провести") { Task { if await vm.save(post: true) { onSaved(); dismiss() } } }
+            Button("Провести") { Task { if await vm.save(post: true) { finishPosted() } } }
             Button("Вернуться", role: .cancel) {}
         } message: { Text(vm.postSummary) }
         // Документ открыт листом: случайный свайп вниз закрывал его и стирал все

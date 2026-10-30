@@ -80,9 +80,15 @@ struct ReportsView: View {
     private func commissionCard(_ d: ReportsData) -> some View {
         if let c = d.commission {
             SectionCard(title: "Комиссии маркетплейса") {
-                InfoRow(label: "Комиссия", value: Money.rub(c.comm))
-                InfoRow(label: "Сервисный сбор", value: Money.rub(c.fee))
-                InfoRow(label: "Заказов со списанием", value: "\(c.cnt ?? 0)")
+                // commission.hidden: нет права «Финансы» — сервер прислал нули, а не суммы.
+                if c.hidden == true {
+                    Text("Комиссии видит владелец или сотрудник с правом «Финансы»")
+                        .font(.subheadline).foregroundColor(Brand.muted)
+                } else {
+                    InfoRow(label: "Комиссия", value: Money.rub(c.comm))
+                    InfoRow(label: "Сервисный сбор", value: Money.rub(c.fee))
+                    InfoRow(label: "Заказов со списанием", value: "\(c.cnt ?? 0)")
+                }
             }
         }
     }

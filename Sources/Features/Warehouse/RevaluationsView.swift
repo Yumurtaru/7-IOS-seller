@@ -944,16 +944,23 @@ private struct MarkupCategoriesPane: View {
     @ObservedObject var vm: MarkupCategoriesViewModel
     @State private var all = ""
     @State private var allRounding = "integer"
+    /// А116: наценку и округление категории меняет только право «Цены» (иначе 403).
+    private var canPrice: Bool { Session.shared.can("products.price") }
 
     var body: some View {
         List {
             Section {
                 Text("Наценка категории работает при проведении прихода: розничная цена = закупочная × (1 + наценка), с округлением. Пустое поле — приход розничную цену не меняет. Товарам с ценой, заданной вручную, приход цену не меняет.")
                     .font(.footnote).foregroundColor(Brand.muted)
+                if !canPrice {
+                    Text("Наценку и округление категории меняет владелец или сотрудник с правом «Менять цены».")
+                        .font(.footnote).foregroundColor(Brand.red)
+                }
                 if let n = vm.notice { Text(n).font(.footnote).foregroundColor(Brand.green) }
             }
             .listRowBackground(Brand.card)
             if !vm.cats.isEmpty {
+                if canPrice {
                 Section("Всем категориям") {
                     HStack {
                         TextField("%", text: $all).keyboardType(.decimalPad).textFieldStyle(.roundedBorder).frame(width: 90)
@@ -967,13 +974,15 @@ private struct MarkupCategoriesPane: View {
                     Text("потом «Сохранить»").font(.caption2).foregroundColor(Brand.muted)
                 }
                 .listRowBackground(Brand.card)
+                }
                 Section {
                     ForEach(vm.cats) { c in markupRow(c) }
                 }
+                .disabled(!canPrice)
                 .listRowBackground(Brand.card)
                 Section {
                     Button("Сохранить") { Task { await vm.save() } }
-                        .disabled(vm.saving)
+                        .disabled(vm.saving || !canPrice)
                     HelpLink(path: revalHelp, title: "Как это работает")
                 }
                 .listRowBackground(Brand.card)

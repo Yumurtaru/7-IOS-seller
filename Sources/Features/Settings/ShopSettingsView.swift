@@ -31,6 +31,9 @@ final class ShopSettingsViewModel: ObservableObject {
     @Published var logoPath: String?
     @Published var returnWindowHours = 24
     @Published var telegramChatId = ""
+    /// Чат Telegram, как его отдал сервер: сотрудник (не владелец) шлёт его же —
+    /// менять чат может только владелец (А116), прежнее значение сервер принимает.
+    private var loadedChatId = ""
     @Published var tgEvents: Set<String> = []
     /// Основные поля в том виде, в каком их отдал сервер (см. saveMain).
     private var loadedMain: [String: String] = [:]
@@ -69,6 +72,7 @@ final class ShopSettingsViewModel: ObservableObject {
             }
             if let n = res.notifications {
                 telegramChatId = n.telegramChatId ?? ""
+                loadedChatId = telegramChatId
                 tgEvents = Set(n.events ?? [])
                 // Сохранённые ключи, которых нет в списке (low_stock), не теряются:
                 // tgEvents уходит при сохранении целиком.
@@ -174,7 +178,8 @@ final class ShopSettingsViewModel: ObservableObject {
         guard canSaveFields else { return }
         await run("Настройки уведомлений сохранены") {
             try await API.shared.saveNotificationSettings(
-                telegramChatId: self.telegramChatId.trimmingCharacters(in: .whitespaces),
+                telegramChatId: Session.shared.isOwner
+                    ? self.telegramChatId.trimmingCharacters(in: .whitespaces) : self.loadedChatId,
                 events: Array(self.tgEvents)
             )
         }
@@ -385,6 +390,7 @@ struct ShopSettingsView: View {
             TextField("Telegram chat_id", text: $vm.telegramChatId)
                 .keyboardType(.numbersAndPunctuation)
                 .textInputAutocapitalization(.never)
+                .disabled(!Session.shared.isOwner)
             // П-27.9: список событий — с сервера (events_available), иначе прежний.
             ForEach(vm.eventOptions, id: \.0) { key, title in
                 Toggle(title, isOn: Binding(
@@ -400,7 +406,8 @@ struct ShopSettingsView: View {
         } header: {
             Text("Уведомления в Telegram")
         } footer: {
-            Text("chat_id вашего Telegram-аккаунта или группы для событий магазина.")
+            Text("chat_id вашего Telegram-аккаунта или группы для событий магазина."
+                 + (Session.shared.isOwner ? "" : " Чат Telegram для уведомлений меняет только владелец организации."))
         }
         .listRowBackground(Brand.card)
     }

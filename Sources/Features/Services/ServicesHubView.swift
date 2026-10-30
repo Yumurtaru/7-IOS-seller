@@ -45,6 +45,10 @@ final class ServicesViewModel: ObservableObject {
     @Published var categories: [SellerCategory] = []
     @Published var state: LoadState = .idle
     @Published var error: String?
+    /// Пояснение после сохранения (не ошибка): сколько окон расписания удалено.
+    @Published var notice: String?
+    /// Услуги, у которых тумблер «активна» уже в пути.
+    @Published private(set) var togglingIds: Set<Int> = []
 
     func load() async {
         if items.isEmpty { state = .loading }
@@ -65,15 +69,26 @@ final class ServicesViewModel: ObservableObject {
               price: Decimal, masterId: Int?, isActive: Bool,
               categoryId: Int, sortOrder: Int) async -> Bool {
         error = nil
+        notice = nil
         // Снимок до создания: по нему узнаём новую услугу, если ответ не дошёл.
         let before = Set(items.map(\.serviceId))
         let listKnown = state == .loaded
         do {
             if let id = id {
-                try await API.shared.updateService(id: id, name: name, description: description,
-                                                   durationMin: duration, bufferMin: buffer,
-                                                   price: price, masterId: masterId, isActive: isActive,
-                                                   categoryId: categoryId, sortOrder: sortOrder)
+                let ack = try await API.shared.updateServiceAck(id: id, name: name, description: description,
+                                                                durationMin: duration, bufferMin: buffer,
+                                                                price: price, masterId: masterId, isActive: isActive,
+                                                                categoryId: categoryId, sortOrder: sortOrder)
+                // Паритет с Android: точное число удалённых окон после смены
+                // длительности или перерыва (slots_removed / slots_kept_booked).
+                let removed = ack.slotsRemoved ?? 0
+                let kept = ack.slotsKeptBooked ?? 0
+                if removed > 0 {
+                    notice = "Длительность изменилась: удалено свободных окон — \(removed). Создайте расписание заново во вкладке «Расписание»"
+                        + (kept > 0 ? "; записи клиентов (\(kept)) сохранены." : ".")
+                } else if kept > 0 {
+                    notice = "Длительность изменилась: окна с записями клиентов (\(kept)) остались по старой сетке — проверьте расписание."
+                }
             } else {
                 _ = try await API.shared.createService(name: name, description: description,
                                                        durationMin: duration, bufferMin: buffer,
@@ -109,6 +124,23 @@ final class ServicesViewModel: ObservableObject {
         }
     }
 
+    /// Быстрый тумблер «активна» в строке (паритет с Android). Уходит только
+    /// is_active: сервер обновляет лишь пришедшие поля — цена, мастер, категория
+    /// и расписание не трогаются.
+    func setActive(_ service: ServiceItem, active: Bool) async {
+        let id = service.serviceId
+        guard !togglingIds.contains(id) else { return }
+        togglingIds.insert(id)
+        defer { togglingIds.remove(id) }
+        error = nil
+        do {
+            try await API.shared.setServiceActive(id: id, active: active)
+            if let i = items.firstIndex(where: { $0.serviceId == id }) { items[i].isActive = active }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     /// Сервер деактивирует услугу и удаляет свободные слоты (занятые записи не трогает).
     func remove(_ service: ServiceItem) async {
         error = nil
@@ -133,40 +165,56 @@ struct ServicesListView: View {
             if let err = vm.error {
                 Section { Text(err).font(.footnote).foregroundColor(Brand.red) }
             }
+            if let note = vm.notice {
+                Section { Text(note).font(.footnote).foregroundColor(Brand.amber) }
+            }
             ForEach(vm.items) { service in
-                Button { editTarget = service } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(service.name ?? "Услуга")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(Brand.text)
-                            if service.isActive != true {
-                                StatusBadge(text: "Выключена", color: Brand.muted)
+                HStack(spacing: 8) {
+                    Button { editTarget = service } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(service.name ?? "Услуга")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(Brand.text)
+                                if service.isActive != true {
+                                    StatusBadge(text: "Выключена", color: Brand.muted)
+                                }
+                                Spacer()
+                                // Цена 0 — бесплатная услуга (так и сказано в форме):
+                                // в списке стояло «0 ₽».
+                                Text((service.price ?? 0) > 0 ? Money.rub(service.price) : "Бесплатно")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundColor(Brand.text)
                             }
-                            Spacer()
-                            // Цена 0 — бесплатная услуга (так и сказано в форме):
-                            // в списке стояло «0 ₽».
-                            Text((service.price ?? 0) > 0 ? Money.rub(service.price) : "Бесплатно")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundColor(Brand.text)
+                            HStack(spacing: 10) {
+                                Label("\(service.durationMin ?? 30) мин", systemImage: "clock")
+                                if let buffer = service.bufferMin, buffer > 0 {
+                                    Label("буфер \(buffer) мин", systemImage: "hourglass")
+                                }
+                                if let m = service.master, !m.isEmpty {
+                                    Label(m, systemImage: "person")
+                                }
+                                // Место услуги в списке задаёт порядок КАТЕГОРИИ —
+                                // пусть продавец видит, в какой она лежит.
+                                if let cat = service.categoryName, !cat.isEmpty {
+                                    Label(cat, systemImage: "folder")
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
                         }
-                        HStack(spacing: 10) {
-                            Label("\(service.durationMin ?? 30) мин", systemImage: "clock")
-                            if let buffer = service.bufferMin, buffer > 0 {
-                                Label("буфер \(buffer) мин", systemImage: "hourglass")
-                            }
-                            if let m = service.master, !m.isEmpty {
-                                Label(m, systemImage: "person")
-                            }
-                            // Место услуги в списке задаёт порядок КАТЕГОРИИ —
-                            // пусть продавец видит, в какой она лежит.
-                            if let cat = service.categoryName, !cat.isEmpty {
-                                Label(cat, systemImage: "folder")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundColor(Brand.muted)
+                        .contentShape(Rectangle())
                     }
+                    // Своя кнопка строки: без .borderless касание по тумблеру открывало бы форму.
+                    .buttonStyle(.borderless)
+                    // Паритет с Android: включить/выключить услугу прямо в списке.
+                    Toggle("Активна", isOn: Binding(
+                        get: { service.isActive == true },
+                        set: { on in Task { await vm.setActive(service, active: on) } }
+                    ))
+                    .labelsHidden()
+                    .tint(Brand.green)
+                    .disabled(vm.togglingIds.contains(service.serviceId))
                 }
                 .listRowBackground(Brand.card)
                 // Без полного свайпа: длинный жест удалял услугу (и её расписание)

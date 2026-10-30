@@ -67,6 +67,9 @@ final class LoyaltyViewModel: ObservableObject {
 
 struct LoyaltyView: View {
     @StateObject private var vm = LoyaltyViewModel()
+    /// А116: сохранение (POST /api/seller/loyalty) — право «Начислять бонусы»
+    /// (StaffAccess::actionPerms → customers.bonus), иначе 403. Без права — просмотр.
+    private var canEdit: Bool { Session.shared.can("customers.bonus") }
 
     var body: some View {
         Form {
@@ -102,15 +105,17 @@ struct LoyaltyView: View {
             } header: {
                 Text("Кешбэк баллами")
             } footer: {
-                Text("Баллы начисляются автоматически при выполнении заказа (1 балл = 1 ₽).")
+                Text("Баллы начисляются автоматически при выполнении заказа (1 балл = 1 ₽)."
+                     + (canEdit ? "" : "\nПроцент кешбэка и условия программы меняет владелец или сотрудник с правом «Начислять бонусы»."))
             }
+            .disabled(!canEdit)
 
             Section {
                 Button("Сохранить") { Task { await vm.save() } }
                     .font(.subheadline.weight(.bold))
                     .frame(maxWidth: .infinity)
                     .foregroundColor(Brand.accent)
-                    .disabled(vm.state != .loaded || vm.saving)
+                    .disabled(vm.state != .loaded || vm.saving || !canEdit)
                 if vm.success {
                     Text("Сохранено").font(.footnote).foregroundColor(Brand.green)
                 }

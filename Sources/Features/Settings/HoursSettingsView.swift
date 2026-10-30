@@ -20,7 +20,21 @@ struct EditableDayHours: Identifiable {
 final class HoursSettingsViewModel: ObservableObject {
     /// Любая правка после сохранения снимает «Сохранено»: раньше надпись
     /// висела и над несохранёнными изменениями.
-    @Published var days: [EditableDayHours] = [] { didSet { success = false } }
+    @Published var days: [EditableDayHours] = [] {
+        didSet {
+            success = false
+            // Поправили день — его ошибка сервера уже не о нём; ошибки остальных дней остаются.
+            guard !dayErrors.isEmpty else { return }
+            for d in days {
+                guard let old = oldValue.first(where: { $0.day == d.day }) else { continue }
+                if old.isClosed != d.isClosed || old.open != d.open || old.close != d.close {
+                    dayErrors[d.day] = nil
+                }
+            }
+        }
+    }
+    /// АY (сайт А616): 422 с errors["hours.<день>.<open_time|close_time>"] — текст под днём.
+    @Published var dayErrors: [Int: String] = [:]
     @Published var state: LoadState = .idle
     @Published var error: String?
     @Published var success = false
@@ -83,6 +97,7 @@ final class HoursSettingsViewModel: ObservableObject {
         saving = true
         defer { saving = false }
         error = nil
+        dayErrors = [:]
         success = false
         // Открытие = закрытие сервер понимает как «открыто одну минуту»
         // (core/helpers.php: shopOpenAt/attachShopOpen) — заведение весь день
@@ -93,11 +108,14 @@ final class HoursSettingsViewModel: ObservableObject {
             error = "\(dayName): открытие и закрытие в одно время — заведение будет закрыто весь день. Для круглосуточной работы укажите 00:00–23:59."
             return
         }
+        // «ЧЧ:ММ» без секунд — сервер (сайт А616) принимает его как есть;
+        // MySQL TIME принимает это и на старом сервере. У выходного — те же
+        // корректные часы из выбора времени (не пустая строка и не «:00»).
         let payload: [[String: Any]] = days.map { d in
             [
                 "day_of_week": d.day,
-                "open_time": Self.timeFmt.string(from: d.open),
-                "close_time": Self.timeFmt.string(from: d.close),
+                "open_time": hm.string(from: d.open),
+                "close_time": hm.string(from: d.close),
                 "is_closed": d.isClosed ? 1 : 0,
             ]
         }
@@ -105,9 +123,29 @@ final class HoursSettingsViewModel: ObservableObject {
             try await API.shared.saveShopHours(payload)
             success = true
             notSaved = false
+        } catch let e as APIDetailedError where e.status == 422 {
+            // Ошибки по дням — под строкой дня; набранное не сбрасываем.
+            let perDay = Self.dayErrors(e.fields)
+            dayErrors = perDay
+            self.error = perDay.isEmpty ? e.localizedDescription : (e.serverError ?? e.localizedDescription)
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// errors["hours.3.open_time"] = ["Укажите время открытия для Ср…"] → [3: "…"].
+    /// Оба поля одного дня — через перенос строки, открытие первым.
+    static func dayErrors(_ fields: [String: [String]]) -> [Int: String] {
+        var out: [Int: String] = [:]
+        for key in fields.keys.sorted() {
+            let parts = key.split(separator: ".")
+            guard parts.count == 3, parts[0] == "hours", let day = Int(parts[1]), (1...7).contains(day) else { continue }
+            let text = (fields[key] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }.joined(separator: " ")
+            guard !text.isEmpty else { continue }
+            out[day] = out[day].map { text + "\n" + $0 } ?? text
+        }
+        return out
     }
 
     /// Скопировать часы понедельника на все дни.
@@ -148,6 +186,9 @@ struct HoursSettingsView: View {
                     if !day.isClosed {
                         DatePicker("Открытие", selection: $day.open, displayedComponents: .hourAndMinute)
                         DatePicker("Закрытие", selection: $day.close, displayedComponents: .hourAndMinute)
+                    }
+                    if let dayErr = vm.dayErrors[day.day] {
+                        Text(dayErr).font(.footnote).foregroundColor(Brand.red)
                     }
                 }
                 .listRowBackground(Brand.card)

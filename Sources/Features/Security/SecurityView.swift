@@ -128,6 +128,9 @@ final class SecurityFeedViewModel: ObservableObject {
 
     /// Клиентская пагинация: сервер отдаёт до 300 строк разом.
     @Published var visibleCount = 50
+    /// А320: следующая страница с сервера (before_id) — идёт / не загрузилась.
+    @Published var loadingMore = false
+    @Published var moreError: String?
 
     /// Фильтр, по которому показаны данные. Чипы не отменяют запросы: ответ
     /// по «90 дн.», пришедший после «7 дн.», показывался под «7 дн.», а сбой
@@ -143,6 +146,7 @@ final class SecurityFeedViewModel: ObservableObject {
             feed = r
             shownKey = key
             visibleCount = 50
+            moreError = nil
             state = .loaded
         } catch is CancellationError {
         } catch {
@@ -155,7 +159,33 @@ final class SecurityFeedViewModel: ObservableObject {
     var visible: [AuditEntry] {
         Array((feed?.items ?? []).prefix(visibleCount))
     }
-    var hasMore: Bool { (feed?.items?.count ?? 0) > visibleCount }
+    var hasMore: Bool { (feed?.items?.count ?? 0) > visibleCount || serverHasMore }
+    private var serverHasMore: Bool { feed?.hasMore == true && (feed?.nextBeforeId ?? 0) > 0 }
+
+    /// «Показать ещё»: сначала уже загруженные строки, потом следующие 300 с сервера.
+    func showMore() async {
+        if (feed?.items?.count ?? 0) > visibleCount { visibleCount += 50; return }
+        guard serverHasMore, !loadingMore, let before = feed?.nextBeforeId else { return }
+        let key = "\(days)|\(action)"
+        guard key == shownKey else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        moreError = nil
+        do {
+            let r = try await API.shared.securityFeed(days: days, action: action.isEmpty ? nil : action, beforeId: before)
+            guard key == "\(days)|\(action)", key == shownKey else { return }
+            let known = Set((feed?.items ?? []).compactMap(\.entryId))
+            let fresh = (r.items ?? []).filter { e in e.entryId.map { !known.contains($0) } ?? false }
+            feed?.items = (feed?.items ?? []) + fresh
+            feed?.hasMore = r.hasMore
+            feed?.nextBeforeId = r.nextBeforeId
+            if let l = r.labels, !l.isEmpty { feed?.labels = (feed?.labels ?? [:]).merging(l) { a, _ in a } }
+            visibleCount += 50
+        } catch is CancellationError {
+        } catch {
+            moreError = error.localizedDescription
+        }
+    }
     func label(_ action: String?) -> String {
         guard let a = action else { return "—" }
         return feed?.labels?[a] ?? a
@@ -177,9 +207,16 @@ private struct SecurityFeedTab: View {
                     entryRow(e).listRowBackground(Brand.card)
                 }
                 if vm.hasMore {
-                    Button("Показать ещё") { vm.visibleCount += 50 }
+                    Button {
+                        Task { await vm.showMore() }
+                    } label: {
+                        if vm.loadingMore { ProgressView().frame(maxWidth: .infinity) }
+                        else { Text(vm.moreError.map { "Не загрузилось: \($0) · Повторить" } ?? "Показать ещё") }
+                    }
                         .font(.subheadline.weight(.semibold))
+                        .foregroundColor(vm.moreError == nil ? Brand.accent : Brand.red)
                         .frame(maxWidth: .infinity)
+                        .disabled(vm.loadingMore)
                         .listRowBackground(Brand.card)
                 }
             }

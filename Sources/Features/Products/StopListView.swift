@@ -18,11 +18,21 @@ final class StopListViewModel: ObservableObject {
     /// Поиск товара не удался (нет сети). Раньше список просто пустел, и
     /// казалось, что такого товара нет — блюдо так и не ставили на стоп.
     @Published var searchError: String?
+    /// АY (сайт А616): сервер знает «До закрытия» (until_close) — признак: until_in_sec
+    /// у строк стоп-листа или новые поля у товаров в поиске. Нет признака — как раньше.
+    @Published private(set) var knowsUntilClose = false
+    /// Когда прочитан список (время работы устройства, не часы): остаток срока —
+    /// until_in_sec сервера минус прошедшее с загрузки, часы телефона не участвуют.
+    private(set) var loadedUptime = ProcessInfo.processInfo.systemUptime
 
     func load() async {
         if items.isEmpty { state = .loading }
         do {
-            items = try await API.shared.stopList()
+            let payload = try await API.shared.stopList()
+            items = payload.items
+            loadedUptime = ProcessInfo.processInfo.systemUptime
+            // Непустой список без until_in_sec — сервер старый (или сайт откатили).
+            if !payload.items.isEmpty { knowsUntilClose = payload.knowsUntilClose }
             state = .loaded
         } catch is CancellationError {
         } catch {
@@ -39,7 +49,9 @@ final class StopListViewModel: ObservableObject {
         var found: [ProductSummary] = []
         var failure: String?
         do {
-            found = try await API.shared.products(category: nil, status: nil, q: q, page: 1).items
+            let page = try await API.shared.products(category: nil, status: nil, q: q, page: 1)
+            found = page.items
+            if !page.items.isEmpty { knowsUntilClose = page.knowsFilters }
         } catch is CancellationError {
         } catch {
             failure = error.localizedDescription
@@ -66,7 +78,20 @@ final class StopListViewModel: ObservableObject {
 
     private var adding = false
 
-    func addToStop(productId: Int, reason: String?, untilMinutes: Int?) async -> Bool {
+    /// «осталось 2 ч 5 мин» по until_in_sec сервера; nil — поля нет (старый сервер) или без срока.
+    func remainingText(_ item: StopListItem) -> String? {
+        guard let sec = item.untilInSec else { return nil }
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - loadedUptime)
+        let left = Double(sec) - elapsed
+        // Сервер снимает истёкшие стопы при чтении списка — здесь только подсказка.
+        guard left > 0 else { return "срок вышел, обновите список" }
+        let minutes = max(1, Int((left / 60).rounded(.up)))
+        if minutes < 60 { return "осталось \(minutes) мин" }
+        let h = minutes / 60, m = minutes % 60
+        return m == 0 ? "осталось \(h) ч" : "осталось \(h) ч \(m) мин"
+    }
+
+    func addToStop(productId: Int, reason: String?, untilMinutes: Int?, untilClose: Bool = false) async -> Bool {
         // Двойной тап «Поставить на стоп» — второй запрос получал ошибку.
         guard !adding else { return false }
         adding = true
@@ -74,7 +99,8 @@ final class StopListViewModel: ObservableObject {
         error = nil
         do {
             _ = try await API.shared.addToStopList(productId: productId, modifierId: nil,
-                                                   reason: reason, untilMinutes: untilMinutes)
+                                                   reason: reason, untilMinutes: untilMinutes,
+                                                   untilClose: untilClose && knowsUntilClose)
             await load()
             return true
         } catch {
@@ -129,6 +155,15 @@ struct StopListView: View {
                         if let until = item.until, !until.isEmpty {
                             StatusBadge(text: "до \(DateFmt.short(until))", color: Brand.amber)
                         }
+                        // АY: остаток — по часам сервера (until_in_sec), а не телефона.
+                        if item.untilInSec != nil {
+                            // Пересчёт раз в минуту.
+                            TimelineView(.periodic(from: .now, by: 60)) { _ in
+                                if let left = vm.remainingText(item) {
+                                    Text(left).font(.caption2).foregroundColor(Brand.amber)
+                                }
+                            }
+                        }
                         Spacer()
                         Text(DateFmt.short(item.createdAt)).font(.caption2).foregroundColor(Brand.muted)
                     }
@@ -178,9 +213,16 @@ struct AddToStopSheet: View {
     // «До завтра» раньше было ровно 1440 минут: блюдо, снятое в 22:00, не
     // продавалось и весь следующий день до 22:00. Теперь «До конца дня» —
     // до полуночи по Москве (время сервера), а сутки — отдельным пунктом.
-    private let durations: [(Int, String)] = [
+    private let baseDurations: [(Int, String)] = [
         (0, "Бессрочно"), (60, "1 час"), (180, "3 часа"), (-1, "До конца дня"), (1440, "Сутки"),
     ]
+    /// АY: «До закрытия» (-2) — until_close, по часам работы на сервере (сайт А616).
+    private var durations: [(Int, String)] {
+        guard vm.knowsUntilClose else { return baseDurations }
+        var d = baseDurations
+        d.insert((-2, "До закрытия"), at: 3)
+        return d
+    }
 
     /// Минут до ближайшей полуночи по Москве (не меньше 1).
     private static func minutesToMoscowMidnight(_ now: Date = Date()) -> Int {
@@ -231,10 +273,13 @@ struct AddToStopSheet: View {
                     Button {
                         guard let p = selected else { return }
                         Task {
+                            // «До закрытия» без признака сервера не выбрать; на всякий случай
+                            // без него уходит «До конца дня», а не бессрочный стоп.
                             if await vm.addToStop(productId: p.productId,
                                                   reason: reason.isEmpty ? nil : reason,
                                                   untilMinutes: duration < 0 ? Self.minutesToMoscowMidnight()
-                                                                : (duration > 0 ? duration : nil)) {
+                                                                : (duration > 0 ? duration : nil),
+                                                  untilClose: duration == -2) {
                                 dismiss()
                             }
                         }

@@ -248,6 +248,8 @@ struct APIDetailedError: LocalizedError {
     /// Номер документа из errors ответа (Response::error(…, ['document_id' => N])):
     /// складской документ создан черновиком, а провести не вышло. nil — нет.
     var documentId: Int? = nil
+    /// А317: служебные поля errors строками (error_code, poi_id, remaining…). Пусто — нет.
+    var extras: [String: String] = [:]
     var errorDescription: String? { message }
 }
 
@@ -412,6 +414,19 @@ final class API {
     /// Раньше показывалось голое «Ошибка 403» / «Ошибка 413».
     /// Целое из errors ответа (сервер кладёт туда служебные числа, например
     /// document_id) — конверт берёт из errors только тексты. Нет — nil.
+    /// Служебные поля errors ответа (Response::error(…, $extra)) — числа, строки и
+    /// логические строками; списки (тексты полей) пропускаем.
+    static func errorsExtras(_ data: Data) -> [String: String] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let errs = root["errors"] as? [String: Any] else { return [:] }
+        var out: [String: String] = [:]
+        for (k, v) in errs {
+            if let s = v as? String { out[k] = s }
+            else if let n = v as? NSNumber { out[k] = n.stringValue }
+        }
+        return out
+    }
+
     static func errorsInt(_ data: Data, _ key: String) -> Int? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let errs = root["errors"] as? [String: Any] else { return nil }
@@ -463,6 +478,46 @@ final class API {
         try await send(makeRequest("POST", path, jsonBody: body), as: type)
     }
 
+    /// А316: GET списка, у которого «есть ещё» лежит в meta конверта
+    /// (Response::ok($data, ['has_more' => …])), а не в data. Данные, текст ошибки
+    /// и повторы — как у get(): до maxRetries доп. попыток при сбое сети и 5xx без
+    /// JSON (таймаут — один раз), с той же паузой. meta — словарь, пустой у старого сервера.
+    func getWithMeta<T: Decodable>(_ path: String, query: [String: String] = [:],
+                                   as type: T.Type) async throws -> (T, [String: Any]) {
+        let attempts = maxRetries + 1
+        var lastError: Error = APIError.network
+        for attempt in 0..<attempts {
+            do {
+                return try await getWithMetaOnce(path, query: query, as: type)
+            } catch let e as APIError where (e.isRetryable || (e.isTimeout && attempt == 0)) && attempt < attempts - 1 {
+                lastError = e
+                let delay = pow(2.0, Double(attempt)) * 0.5 + Double.random(in: 0...0.3)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                continue
+            }
+        }
+        throw lastError
+    }
+
+    private func getWithMetaOnce<T: Decodable>(_ path: String, query: [String: String],
+                                               as type: T.Type) async throws -> (T, [String: Any]) {
+        let (status, data) = try await rawRequest("GET", path, query: query)
+        let env: SellerEnvelope<T>
+        do { env = try decoder.decode(SellerEnvelope<T>.self, from: data) }
+        catch {
+            if status >= 500 { throw APIError.http(status) }
+            if status >= 400 { throw APIError.server(API.statusText(status)) }
+            throw APIError.decoding
+        }
+        if env.ok == false || status >= 400 {
+            throw APIError.server(env.hasErrorText || status < 400
+                ? API.withRetryHint(env.errorText, status: status) : API.statusText(status))
+        }
+        guard let payload = env.data else { throw APIError.decoding }
+        let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (payload, (root?["meta"] as? [String: Any]) ?? [:])
+    }
+
     /// А81: POST, отказ которого нужен с кодом и полями (APIDetailedError: status,
     /// code, fields) — жалоба на курьера (409 complaint_exists, 422 reason/comment).
     /// Без повторов, как у всех POST. Тело — с ключами по алфавиту (makeRequest).
@@ -494,6 +549,20 @@ final class API {
 
     func put<T: Decodable>(_ path: String, body: [String: Any?] = [:], as type: T.Type) async throws -> T {
         try await send(makeRequest("PUT", path, jsonBody: body), as: type)
+    }
+
+    /// АY: PUT, отказ которого нужен со статусом и кодом (APIDetailedError) — правка
+    /// модификатора и группы (сайт А616): 405 method_not_allowed / 404 no_route у старого
+    /// сервера — «доступно после обновления сайта», а не ошибка. Без повторов, текст тот же.
+    func putDetailed<T: Decodable>(_ path: String, body: [String: Any?] = [:], as type: T.Type) async throws -> T {
+        try await perform(makeRequest("PUT", path, jsonBody: body), as: type, detailed: true, statusOnBareError: true)
+    }
+
+    /// АY: ответ старого сервера «нет такой ручки» (Router: 405 method_not_allowed,
+    /// index.php: 404 no_route).
+    static func isNoRoute(_ error: Error) -> Bool {
+        guard let e = error as? APIDetailedError else { return false }
+        return e.status == 405 || e.code == "method_not_allowed" || e.code == "no_route"
     }
 
     func delete<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
@@ -1006,7 +1075,8 @@ final class API {
                 // А80: вызов курьера — с кодом и полями (тот же текст).
                 if detailed {
                     throw APIDetailedError(status: status, code: env.code, message: text, fields: env.errors ?? [:],
-                                           serverError: env.error, documentId: API.errorsInt(data, "document_id"))
+                                           serverError: env.error, documentId: API.errorsInt(data, "document_id"),
+                                           extras: API.errorsExtras(data))
                 }
                 throw APIError.server(text)
             }

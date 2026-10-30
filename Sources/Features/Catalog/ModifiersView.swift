@@ -72,11 +72,17 @@ struct ModifiersView: View {
     @State private var creating = false
     @State private var addOptionTo: ModifierGroup?
     @State private var groupToDelete: ModifierGroup?
+    /// АY (сайт А616): правка варианта и группы без удаления.
+    @State private var editOption: ModifierOption?
+    @State private var editGroup: ModifierGroup?
 
     /// Цена модификатора — тоже цена: удалить группу, добавить или удалить вариант
     /// сервер даёт только с правом «Менять цены» (StaffAccess::actionPerms →
     /// products.price). Без него кнопки вели к 403 — не показываем их.
     private var canPrice: Bool { Session.shared.can("products.price") }
+    /// Правка названия, наличия и правил группы — право раздела «Товары»
+    /// (PUT /modifiers, /modifier-groups в StaffAccess — раздел products).
+    private var canEdit: Bool { Session.shared.can("products") }
 
     var body: some View {
         List {
@@ -94,6 +100,8 @@ struct ModifiersView: View {
                                 StatusBadge(text: "Стоп", color: Brand.red)
                             }
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { if canEdit { editOption = o } }
                         // Без полного свайпа: длинный жест удалял вариант без вопроса.
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if canPrice {
@@ -116,6 +124,11 @@ struct ModifiersView: View {
                         Text(g.name ?? "Группа")
                         Spacer()
                         Text(groupRule(g)).font(.caption2).foregroundColor(Brand.muted)
+                        if canEdit {
+                            Button { editGroup = g } label: { Image(systemName: "pencil") }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Изменить группу")
+                        }
                     }
                 } footer: {
                     // Группа уходит со всеми вариантами и пропадает у товаров —
@@ -175,6 +188,16 @@ struct ModifiersView: View {
                 await vm.addOption(group: g, name: name, price: price)
             }
             .errorAlert($vm.error)
+        }
+        .sheet(item: $editOption) { o in
+            ModifierOptionEditSheet(option: o, canPrice: canPrice) { changed in
+                if changed { Task { await vm.load() } }
+            }
+        }
+        .sheet(item: $editGroup) { g in
+            ModifierGroupEditSheet(group: g) { changed in
+                if changed { Task { await vm.load() } }
+            }
         }
         .alert("Не получилось", isPresented: Binding(get: { vm.error != nil }, set: { if !$0 { vm.error = nil } })) {
             Button("Понятно", role: .cancel) { vm.error = nil }

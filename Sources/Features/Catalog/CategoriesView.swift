@@ -158,6 +158,8 @@ struct CategoriesView: View {
     @State private var creating = false
     /// паритет с Android: удаление категории — только после вопроса.
     @State private var deleting: ProductCategory?
+    /// Обложка категории (метод загрузки был, экрана — нет).
+    @State private var cover: ProductCategory?
 
     var body: some View {
         List {
@@ -198,6 +200,9 @@ struct CategoriesView: View {
             }
             .errorAlert($vm.error)
         }
+        .sheet(item: $cover) { c in
+            CategoryCoverSheet(category: c) { Task { await vm.load() } }
+        }
         .sheet(item: $editing) { c in
             CategoryEditSheet(title: "Категория", name: c.name ?? "", sortOrder: c.sortOrder ?? 0, busy: vm.busy) { name, sort in
                 await vm.rename(c, name: name, sortOrder: sort ?? (c.sortOrder ?? 0))
@@ -228,8 +233,19 @@ struct CategoriesView: View {
         let c = row.cat
         let dim = c.isActive == false || row.parentHidden
         return HStack(spacing: 10) {
-            HStack(spacing: 12) {
+            // Касание по миниатюре — обложка категории (камера, галерея, убрать).
+            Button { cover = c } label: {
                 RemoteImage(path: c.image, size: 40, cornerRadius: 8, placeholderIcon: "folder")
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "camera.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.white, Brand.accent)
+                            .offset(x: 4, y: 4)
+                    }
+            }
+            .opacity(dim ? 0.55 : 1)
+            .accessibilityLabel("Обложка категории")
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(c.name ?? "—").font(.subheadline.weight(.semibold)).foregroundColor(Brand.text)
                     Text("порядок: \(c.sortOrder ?? 0)").font(.caption2).foregroundColor(Brand.muted)
@@ -276,6 +292,8 @@ struct CategoriesView: View {
                       systemImage: c.isActive == false ? "eye" : "eye.slash")
             }
             .tint(Brand.amber)
+            Button { cover = c } label: { Label("Обложка", systemImage: "photo") }
+                .tint(Brand.accent)
         }
         .listRowBackground(Brand.card)
     }

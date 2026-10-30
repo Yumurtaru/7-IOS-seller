@@ -269,3 +269,38 @@ struct InlineErrorBar: View {
             .background(Brand.red)
     }
 }
+
+/// АY (сайт А616): сравнение с прошлым периодом — «▲ 12% · было N» (рост, зелёный) /
+/// «▼ 5% · было N» (падение, красный). В прошлом периоде ноль (или меньше) или
+/// процент округлился до нуля — без стрелки и процента, только «было N»
+/// (как revenue_change сервера: процент только при прошлом > 0).
+enum TrendLogic {
+    /// up: true — рост, false — падение, nil — без процента.
+    static func text(current: Decimal, previous: Decimal, format: (Decimal) -> String) -> (text: String, up: Bool?) {
+        let was = "было " + format(previous)
+        guard previous > 0 else { return (was, nil) }
+        let ratio = NSDecimalNumber(decimal: (current - previous) / previous * 100).doubleValue
+        guard ratio.isFinite else { return (was, nil) }
+        let pct = Int(abs(ratio).rounded())
+        guard pct != 0 else { return (was, nil) }
+        return ratio > 0 ? ("▲ \(pct)% · " + was, true) : ("▼ \(pct)% · " + was, false)
+    }
+}
+
+/// Строка тренда под цифрой. previous nil — ничего (старый сервер или нет права).
+struct TrendText: View {
+    let current: Decimal?
+    let previous: Decimal?
+    let format: (Decimal) -> String
+
+    var body: some View {
+        if let prev = previous {
+            let t = TrendLogic.text(current: current ?? 0, previous: prev, format: format)
+            Text(t.text)
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(t.up == true ? Brand.green : (t.up == false ? Brand.red : Brand.muted))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+}

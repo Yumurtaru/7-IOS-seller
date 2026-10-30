@@ -77,11 +77,12 @@ final class ClientDetailViewModel: ObservableObject {
         }
     }
 
-    func toggleBlacklist() async {
+    func toggleBlacklist(reason: String? = nil) async {
         error = nil
         do {
             _ = try await API.shared.setClientBlacklist(id: clientId,
-                                                        remove: detail?.blacklisted == true)
+                                                        remove: detail?.blacklisted == true,
+                                                        reason: reason)
             await load()
         } catch {
             self.error = error.localizedDescription
@@ -109,9 +110,18 @@ struct ClientDetailView: View {
     var onChanged: (() -> Void)?
     @State private var showBonusSheet = false
     @State private var showBlacklistConfirm = false
+    /// АY (сайт А616): при добавлении в чёрный список — необязательная причина (reason).
+    /// false — старый сервер (причину он не пишет): как раньше, без поля.
+    var askReason = false
+    @State private var showBlacklistReason = false
+    /// Признак сервера, если карточку открыли без него (список ещё не дочитал сводку).
+    @State private var serverKnowsReason: Bool?
+    private var withReason: Bool { askReason || serverKnowsReason == true }
+    @State private var blacklistReason = ""
 
-    init(clientId: Int, onChanged: (() -> Void)? = nil) {
+    init(clientId: Int, askReason: Bool = false, onChanged: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: ClientDetailViewModel(clientId: clientId))
+        self.askReason = askReason
         self.onChanged = onChanged
     }
 
@@ -156,7 +166,22 @@ struct ClientDetailView: View {
                 Task { await vm.toggleBlacklist(); onChanged?() }
             }
         }
+        .alert("Добавить клиента в чёрный список?", isPresented: $showBlacklistReason) {
+            TextField("Причина (необязательно)", text: $blacklistReason)
+            Button("В чёрный список", role: .destructive) {
+                let r = blacklistReason
+                blacklistReason = ""
+                Task { await vm.toggleBlacklist(reason: r); onChanged?() }
+            }
+            Button("Отмена", role: .cancel) { blacklistReason = "" }
+        }
         .task { await vm.load() }
+        .task {
+            // АY: причина ЧС — только у сервера А616 (признак — ответ /clients/segments).
+            if !askReason && serverKnowsReason == nil {
+                serverKnowsReason = await API.shared.clientSegments() != nil
+            }
+        }
     }
 
     // ── Шапка ────────────────────────────────────────────────────────────────
@@ -247,7 +272,11 @@ struct ClientDetailView: View {
                     .tint(Brand.accent)
                 }
                 if canBlacklist {
-                    Button { showBlacklistConfirm = true } label: {
+                    Button {
+                        // АY: добавление на новом сервере — с полем причины; снятие — как раньше.
+                        if withReason && d.blacklisted != true { showBlacklistReason = true }
+                        else { showBlacklistConfirm = true }
+                    } label: {
                         Label(d.blacklisted == true ? "Из ЧС" : "В ЧС", systemImage: "hand.raised")
                             .frame(maxWidth: .infinity)
                     }

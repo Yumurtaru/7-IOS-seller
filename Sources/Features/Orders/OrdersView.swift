@@ -2,8 +2,10 @@ import SwiftUI
 import Combine
 
 // ============================================================================
-//  Заказы — GET /api/seller/orders?status=&payment=&page= (по 20 на страницу,
-//  has_more от сервера). Фильтры-чипы по статусу и оплате, deep link в деталь.
+//  Заказы — GET /api/seller/orders?status=&payment=&date=&page= (по 20 на
+//  страницу, has_more от сервера). Фильтры-чипы по статусу и оплате, день
+//  оформления (?date=), поиск по номеру/телефону/имени на сервере (?search=,
+//  П-61 №1; с задержкой ввода, вместе с фильтрами), deep link в деталь.
 // ============================================================================
 
 @MainActor
@@ -18,8 +20,20 @@ final class OrdersViewModel: ObservableObject {
     @Published var paymentFilter: String? {
         didSet { if paymentFilter != oldValue { items = []; state = .loading; gen += 1; Task { await reload() } } }
     }
+    /// День оформления (сервер: ?date=yyyy-MM-dd, routes/seller.php). nil — за всё время.
+    @Published var dateFilter: Date? {
+        didSet { if dateFilter != oldValue { items = []; state = .loading; gen += 1; Task { await reload() } } }
+    }
+    /// Набранный поиск (номер, телефон или имя). Запрос уходит на сервер через
+    /// 400 мс после последней буквы; прежний запрос отменяется.
+    @Published var search = "" {
+        didSet { if search != oldValue { scheduleSearch() } }
+    }
+    /// Поиск, с которым загружен список (?search=); "" — без поиска.
+    @Published private(set) var appliedSearch = ""
+    private var searchTask: Task<Void, Never>?
     private var page = 1
-    private var hasMore = false
+    @Published private(set) var hasMore = false
     private var loadingMore = false
     /// Следующая страница не загрузилась. Раньше ошибка глоталась, а строка-
     /// триггер уже показана — лента вставала, и заказы ниже были не видны.
@@ -45,6 +59,42 @@ final class OrdersViewModel: ObservableObject {
         ]
     }
 
+    /// Параметр ?date= для сервера: календарный день, выбранный продавцом.
+    var dateParam: String? {
+        guard let d = dateFilter else { return nil }
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        guard let y = c.year, let m = c.month, let day = c.day else { return nil }
+        return String(format: "%04d-%02d-%02d", y, m, day)
+    }
+
+    private var trimmedSearch: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var isSearching: Bool { !appliedSearch.isEmpty }
+    private var searchParam: String? { appliedSearch.isEmpty ? nil : appliedSearch }
+
+    /// Поиск на сервере: ждём паузу в наборе, затем первая страница с ?search=.
+    /// Отменяется только ожидание паузы; сам запрос идёт отдельной задачей
+    /// (ответ устаревшего поиска отсекает gen). Иначе отмена посреди запроса
+    /// оставляла пустой список со спиннером: «12» → стёрли «3» → поиск тот же.
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        let term = trimmedSearch
+        // Тот же поиск уже на экране — перечитывать нечего; но если его загрузка
+        // так и не закончилась (список пуст, спиннер) — перечитываем.
+        if term == appliedSearch {
+            if state == .loading && items.isEmpty { Task { await reload() } }
+            return
+        }
+        searchTask = Task { [weak self] in
+            if !term.isEmpty { try? await Task.sleep(nanoseconds: 400_000_000) }
+            guard !Task.isCancelled, let self = self else { return }
+            self.appliedSearch = term
+            self.items = []
+            self.state = .loading
+            self.gen += 1
+            Task { await self.reload() }
+        }
+    }
+
     /// Сколько строк пришло первой страницей — чтобы при мягком обновлении
     /// заменить именно её, а догруженные страницы оставить.
     private var firstPageCount = 0
@@ -58,7 +108,7 @@ final class OrdersViewModel: ObservableObject {
         moreError = nil
         if items.isEmpty { state = .loading }
         do {
-            let res = try await API.shared.orders(status: statusFilter, payment: paymentFilter, page: 1)
+            let res = try await API.shared.orders(status: statusFilter, payment: paymentFilter, date: dateParam, search: searchParam, page: 1)
             guard myGen == gen else { return }
             if keepPages && page > 1 {
                 // Перечитываем ВСЕ загруженные страницы: склейка «новая первая +
@@ -69,7 +119,7 @@ final class OrdersViewModel: ObservableObject {
                 var p = 1
                 while p < page, more {
                     p += 1
-                    let r = try await API.shared.orders(status: statusFilter, payment: paymentFilter, page: p)
+                    let r = try await API.shared.orders(status: statusFilter, payment: paymentFilter, date: dateParam, search: searchParam, page: p)
                     guard myGen == gen else { return }
                     all += r.items
                     more = r.hasMore ?? false
@@ -85,7 +135,10 @@ final class OrdersViewModel: ObservableObject {
             }
             firstPageCount = res.items.count
             state = .loaded
-            NewOrderPoller.shared.acknowledge()
+            // Под фильтром «за день» (например, вчера) новых заказов на экране нет —
+            // звонок нового заказа не гасим.
+            // Под поиском — тоже: в выдаче поиска нового заказа может не быть.
+            if dateFilter == nil && appliedSearch.isEmpty { NewOrderPoller.shared.acknowledge() }
         } catch is CancellationError {
         } catch {
             guard myGen == gen else { return }
@@ -100,7 +153,7 @@ final class OrdersViewModel: ObservableObject {
         let myGen = gen
         moreError = nil
         do {
-            let res = try await API.shared.orders(status: statusFilter, payment: paymentFilter, page: page + 1)
+            let res = try await API.shared.orders(status: statusFilter, payment: paymentFilter, date: dateParam, search: searchParam, page: page + 1)
             guard myGen == gen else { return }
             page += 1
             // Смещение страниц «плывёт», когда появляются новые записи: одна и та же
@@ -135,11 +188,13 @@ struct OrdersView: View {
     /// Повторный push «чат» по заказу, деталь которого уже открыта из push:
     /// id тот же, экран не пересоздавался — и чат не открывался. Счётчик в .id.
     @State private var chatNonce = 0
+    @State private var showDatePicker = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 chips
+                paymentChips
                 List {
                     ForEach(vm.items) { order in
                         NavigationLink {
@@ -164,16 +219,25 @@ struct OrdersView: View {
                 .scrollContentBackground(.hidden)
                 .refreshable { await vm.reload() }
                 .listState(vm.state, isEmpty: vm.items.isEmpty,
-                           emptyIcon: "bag", emptyTitle: emptyTitle,
+                           emptyIcon: vm.isSearching ? "magnifyingglass" : "bag", emptyTitle: emptyTitle,
                            emptySubtitle: emptySubtitle,
                            retry: { Task { await vm.reload() } })
             }
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("Заказы")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $vm.search, prompt: "Номер, телефон или имя")
             .toolbar {
                 ToolbarItem(placement: .principal) { ShopSwitcherMenu() }
-                ToolbarItem(placement: .navigationBarTrailing) { paymentMenu }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showDatePicker = true } label: {
+                        Image(systemName: vm.dateFilter == nil ? "calendar" : "calendar.badge.clock")
+                    }
+                    .accessibilityLabel("Заказы за день")
+                }
+            }
+            .sheet(isPresented: $showDatePicker) {
+                OrdersDaySheet(selected: vm.dateFilter) { vm.dateFilter = $0 }
             }
             // Возврат из заказа снова запускает .task — догруженные страницы не теряем.
             .task { await vm.reload(keepPages: true) }
@@ -223,6 +287,8 @@ struct OrdersView: View {
     /// Под чипом «Активные» (он выбран по умолчанию) пустой экран писал
     /// «Заказов нет», хотя выполненные заказы есть — называем фильтр.
     private var emptyTitle: String {
+        if vm.isSearching { return "По запросу «\(vm.appliedSearch)» заказов не найдено" }
+        if vm.dateFilter != nil { return "За этот день заказов нет" + (vm.statusFilter == nil && vm.paymentFilter == nil ? "" : " с таким фильтром") }
         if vm.statusFilter == nil && vm.paymentFilter == nil { return "Заказов пока нет" }
         if vm.statusFilter == "active" && vm.paymentFilter == nil { return "Активных заказов нет" }
         return "Нет заказов с таким фильтром"
@@ -231,6 +297,14 @@ struct OrdersView: View {
     /// Новая организация (draft/review) клиентам не видна, и обещание «заказы
     /// появятся со звуковым сигналом» вводило в заблуждение — объясняем почему.
     private var emptySubtitle: String {
+        if vm.isSearching {
+            return vm.statusFilter == nil && vm.paymentFilter == nil && vm.dateFilter == nil
+                ? "Проверьте номер, телефон или имя."
+                : "Поиск учитывает фильтры сверху — выберите «Все», чтобы искать среди всех заказов."
+        }
+        if vm.dateFilter != nil || (vm.statusFilter != nil && vm.statusFilter != "active") || vm.paymentFilter != nil {
+            return "Измените фильтры, чтобы увидеть другие заказы."
+        }
         switch session.shopStatus {
         case "draft": return "Организация ещё не опубликована — клиенты её не видят. Заполните чек-лист на Дашборде и отправьте на проверку."
         case "review": return "Организация на проверке. Заказы начнут приходить после публикации."
@@ -262,28 +336,88 @@ struct OrdersView: View {
         }
     }
 
-    private var paymentMenu: some View {
-        Menu {
-            // Галочка у выбранного способа: раньше видно было только «залитую»
-            // иконку, и какой фильтр включён (почему заказов мало) — не понять.
-            paymentOption("Все способы оплаты", nil)
-            paymentOption("Наличные", "cash")
-            paymentOption("Карта курьеру", "card_courier")
-            paymentOption("СБП", "sbp")
-            paymentOption("Картой онлайн", "online_card")
-        } label: {
-            Image(systemName: vm.paymentFilter == nil ? "creditcard" : "creditcard.fill")
+    /// Паритет с Android: оплата — вторым рядом чипов на виду (раньше — иконка
+    /// в шапке, и включённый фильтр было не заметить). Первый чип — день.
+    private var paymentChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if let d = vm.dateFilter {
+                    FilterChip(title: "📅 " + Self.dayTitle(d) + "  ✕", selected: true) { vm.dateFilter = nil }
+                } else {
+                    FilterChip(title: "📅 Любой день", selected: false) { showDatePicker = true }
+                }
+                ForEach(Self.paymentChipValues, id: \.self) { value in
+                    FilterChip(title: value.map { PaymentLabels.type($0) } ?? "Любая оплата",
+                               selected: vm.paymentFilter == value) {
+                        vm.paymentFilter = value
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
         }
     }
 
-    private func paymentOption(_ title: String, _ value: String?) -> some View {
-        Button { vm.paymentFilter = value } label: {
-            if vm.paymentFilter == value {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
+    private static let paymentChipValues: [String?] = [nil, "cash", "card_courier", "sbp", "online_card"]
+
+    static func dayTitle(_ d: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return "Сегодня" }
+        if cal.isDateInYesterday(d) { return "Вчера" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = cal.component(.year, from: d) == cal.component(.year, from: Date()) ? "d MMM" : "d MMM yyyy"
+        return f.string(from: d)
+    }
+}
+
+/// Выбор дня оформления заказов (фильтр сервера ?date=).
+struct OrdersDaySheet: View {
+    let selected: Date?
+    let onPick: (Date?) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var day: Date
+
+    init(selected: Date?, onPick: @escaping (Date?) -> Void) {
+        self.selected = selected
+        self.onPick = onPick
+        _day = State(initialValue: selected ?? Date())
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DatePicker("День", selection: $day, in: ...Date(), displayedComponents: .date)
+                        .environment(\.locale, Locale(identifier: "ru_RU"))
+                    Button("Сегодня") { onPick(Calendar.current.startOfDay(for: Date())); dismiss() }
+                    Button("Вчера") {
+                        let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+                        onPick(Calendar.current.startOfDay(for: y)); dismiss()
+                    }
+                } footer: {
+                    Text("Покажем заказы, оформленные в этот день. Остальные фильтры остаются.")
+                }
+                .listRowBackground(Brand.card)
+            }
+            .scrollContentBackground(.hidden)
+            .background(Brand.bg.ignoresSafeArea())
+            .navigationTitle("Заказы за день")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if selected != nil {
+                        Button("За всё время") { onPick(nil); dismiss() }
+                    } else {
+                        Button("Отмена") { dismiss() }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { onPick(day); dismiss() } label: { Text("Показать").bold() }
+                }
             }
         }
+        .presentationDetents([.medium, .large])
     }
 }
 

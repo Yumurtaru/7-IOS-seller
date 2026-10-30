@@ -129,7 +129,11 @@ struct MoreView: View {
                 openSection(s)
             }
             .confirmationDialog("Выйти из аккаунта?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-                Button("Выйти", role: .destructive) { session.signOut() }
+                Button("Выйти", role: .destructive) {
+                    // Черновики новых товаров — не для следующего, кто войдёт на этом телефоне.
+                    ProductDraftStore.clearAll()
+                    session.signOut()
+                }
             }
         }
     }
@@ -775,6 +779,10 @@ struct MoreView: View {
                         .font(.caption)
                         .foregroundColor(Brand.muted)
                 }
+            }
+            // Версия и сборка — их первым делом спрашивает поддержка.
+            NavigationLink { AboutAppView() } label: {
+                Label("О приложении", systemImage: "info.circle")
             }
             Button(role: .destructive) {
                 showLogoutConfirm = true

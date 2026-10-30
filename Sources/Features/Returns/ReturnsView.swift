@@ -121,7 +121,8 @@ struct ReturnRow: View {
                     .foregroundColor(Brand.text)
             }
             HStack(spacing: 8) {
-                Text("Заказ №\(ret.orderId ?? 0)")
+                Text("Заказ \(returnOrderLabel(number: ret.orderNumber, orderId: ret.orderId))")
+                    .layoutPriority(1)
                 Text(ret.type == "partial" ? "Частичный" : "Полный")
                 if let client = ret.client, !client.isEmpty { Text(client) }
                 // паритет с Android: причина возврата видна прямо в списке.

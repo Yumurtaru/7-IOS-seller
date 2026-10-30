@@ -7,11 +7,12 @@ import Combine
 //  Кнопки показываются ровно по переходам, которые разрешает сервер
 //  (routes/seller_lodging.php), и только при нужном праве:
 //      держим (hold)  → Подтвердить | Отменить      (заселить нельзя)
-//      ожидает        → Подтвердить | Заселить | Отменить
-//      подтверждена   → Заселить | Незаезд* | Отменить*
+//      ожидает        → Подтвердить | Заселить** | Отменить
+//      подтверждена   → Заселить** | Незаезд* | Отменить*
 //      гость заехал   → Выселить
 //  * по датам: незаезд — от дня заезда до конца проживания, отмена — только
 //    до дня заезда (Lodging::cancelBlocked).
+//  ** не раньше чем за сутки до заезда (А110, routes/seller_lodging.php).
 //  Иначе продавец жал бы кнопку и получал 422 «Из статуса … так нельзя».
 //
 //  Удержание при незаезде считает сервер и возвращает в ответе — показываем
@@ -182,7 +183,7 @@ struct LodgingBookingsView: View {
                 filterRow
                 List {
                     ForEach(vm.items) { b in
-                        LodgingBookingCard(booking: b) { to in
+                        LodgingBookingCard(booking: b, serverToday: vm.today?.date) { to in
                             if to == "cancelled" || to == "no_show" {
                                 sheet = .note(LodgingNoteTarget(booking: b, status: to))
                             } else {
@@ -296,6 +297,8 @@ struct LodgingNoteTarget: Identifiable {
 
 private struct LodgingBookingCard: View {
     let booking: LodgingBooking
+    /// today.date из ответа списка — «сегодня» сервера (Москва). nil — старый сервер.
+    let serverToday: String?
     let onAction: (String) -> Void
 
     var body: some View {
@@ -335,6 +338,18 @@ private struct LodgingBookingCard: View {
                     .font(.caption)
                     .foregroundColor(booking.paymentStatus == "paid" ? Brand.green : Brand.amber)
             }
+            // Паритет с Android: номер заказа брони и статус его оплаты — по нему
+            // бронь ищут в «Заказах» и сверяют оплату.
+            if let n = booking.dailyNumber {
+                // При предоплате её статус уже написан строкой выше — не дублируем.
+                let pay = (booking.prepay ?? 0) > 0 ? "" : PaymentLabels.status(booking.paymentStatus)
+                Text("Заказ №\(n)" + (pay.isEmpty ? "" : " · \(pay)"))
+                    .font(.caption).foregroundColor(Brand.muted)
+            }
+            // Паритет с Android: время заезда и выезда объекта прямо в карточке.
+            if let times = checkTimes {
+                Text(times).font(.caption).foregroundColor(Brand.muted)
+            }
             if let c = booking.guestComment, !c.isEmpty {
                 Text("Гость: \(c)").font(.caption).foregroundColor(Brand.muted)
             }
@@ -350,6 +365,9 @@ private struct LodgingBookingCard: View {
                     }
                 }
             }
+            if let opens = checkInHiddenUntil {
+                Text("Заселить можно с \(opens)").font(.caption).foregroundColor(Brand.muted)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -360,6 +378,58 @@ private struct LodgingBookingCard: View {
     ///   • «Отменить» подтверждённую — только до дня заезда, дальше сервер
     ///     отвечает «отметьте Заселён или Незаезд».
     /// Без этих окон продавец жал кнопку и получал 422 на ровном месте.
+    /// «Заселить» — не раньше чем за сутки до заезда (А110: date_from > сегодня
+    /// сервера + 1 день → 422 «Отметить «Заехал» можно с …»). «Сегодня» — по
+    /// серверу (today.date), как на сайте; из него и даты телефона по Москве
+    /// берём более позднюю: список, открытый с вечера, не прячет кнопку лишние
+    /// сутки. Нет даты сервера (старый сервер, правила там нет) или даты заезда —
+    /// кнопку не прячем: в сомнении решает сервер, его текст показываем.
+    private var checkInOpensYmd: String? {
+        guard let srv = serverToday, LodgingBookingCard.isYmd(srv) else { return nil }
+        let from = String((booking.dateFrom ?? "").prefix(10))
+        guard LodgingBookingCard.isYmd(from), let opens = LodgingBookingCard.shiftYmd(from, by: -1) else { return nil }
+        let today = max(srv, DateFmt.ymdMoscow(Date()))
+        return opens > today ? opens : nil
+    }
+
+    /// «Заезд с 14:00, выезд до 12:00» (check_in_from / check_out_until; секунды
+    /// сервера отрезаем). Нет ни одного времени — строки нет.
+    private var checkTimes: String? {
+        func hm(_ s: String?) -> String? {
+            let t = (s ?? "").trimmingCharacters(in: .whitespaces)
+            return t.isEmpty ? nil : String(t.prefix(5))
+        }
+        let parts = [hm(booking.checkInFrom).map { "Заезд с \($0)" },
+                     hm(booking.checkOutUntil).map { "выезд до \($0)" }].compactMap { $0 }
+        guard !parts.isEmpty else { return nil }
+        let line = parts.joined(separator: ", ")
+        return line.prefix(1).uppercased() + line.dropFirst()
+    }
+
+    /// «ДД.ММ.ГГГГ», с которого можно заселить, — если кнопка сейчас спрятана.
+    private var checkInHiddenUntil: String? {
+        guard Session.shared.can("orders.status"),
+              booking.status == "pending" || booking.status == "confirmed",
+              let o = checkInOpensYmd else { return nil }
+        let p = o.split(separator: "-")
+        return p.count == 3 ? "\(p[2]).\(p[1]).\(p[0])" : nil
+    }
+
+    private static func isYmd(_ s: String) -> Bool {
+        s.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+    }
+
+    /// Сдвиг гражданской даты «yyyy-MM-dd» на n дней (в UTC — без переходов времени).
+    private static func shiftYmd(_ s: String, by n: Int) -> String? {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        guard let d = f.date(from: s) else { return nil }
+        return f.string(from: d.addingTimeInterval(TimeInterval(n) * 86_400))
+    }
+
     private var actions: [(String, String, Color)] {
         // «Сегодня» по Москве: окна разрешённых действий сервер считает по
         // своему времени (DateFmt.ymdMoscow — тот же приём, что в продажах
@@ -383,11 +453,11 @@ private struct LodgingBookingCard: View {
         case "pending":
             if canStatus {
                 out.append(("confirmed", "Подтвердить", Brand.accent))
-                out.append(("checked_in", "Заселить", Brand.green))
+                if checkInOpensYmd == nil { out.append(("checked_in", "Заселить", Brand.green)) }
             }
             if canCancel { out.append(("cancelled", "Отменить", Brand.red)) }
         case "confirmed":
-            if canStatus { out.append(("checked_in", "Заселить", Brand.green)) }
+            if canStatus && checkInOpensYmd == nil { out.append(("checked_in", "Заселить", Brand.green)) }
             if canCancel && today >= from && today <= to {
                 out.append(("no_show", "Незаезд", Brand.amber))
             }
