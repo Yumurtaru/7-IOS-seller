@@ -1,11 +1,15 @@
 import SwiftUI
 
 // ============================================================================
-//  Хаб раздела «Услуги» (type=service): Услуги / Мастера / Расписание.
+//  Хаб раздела «Услуги» (type=service): Услуги / Мастера / Расписание и (АZ, сайт А617)
+//  «Журнал» записи на день — только если сервер ответил на GET /api/seller/slots/day.
 // ============================================================================
 
 struct ServicesHubView: View {
     @State private var section = 0
+    /// АZ: пробный запрос журнала на сегодня вернул успех с массивом columns. Старый сервер
+    /// (404/405), обрыв, нет права — пункта нет.
+    @State private var journalOn = false
 
     var body: some View {
         NavigationStack {
@@ -14,6 +18,7 @@ struct ServicesHubView: View {
                     Text("Услуги").tag(0)
                     Text("Мастера").tag(1)
                     Text("Расписание").tag(2)
+                    if journalOn { Text("Журнал").tag(3) }
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
@@ -22,6 +27,7 @@ struct ServicesHubView: View {
                 switch section {
                 case 1: MastersView()
                 case 2: SlotsView()
+                case 3: if journalOn { BookingJournalView() } else { ServicesListView() }
                 default: ServicesListView()
                 }
             }
@@ -29,7 +35,27 @@ struct ServicesHubView: View {
             .navigationTitle("Услуги")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .principal) { ShopSwitcherMenu() } }
+            .task { await probeJournal() }
         }
+    }
+
+    /// АZ: проба «Журнала записи на день» при открытии раздела.
+    private func probeJournal() async {
+        do {
+            let d = try await API.shared.slotsDay(date: DateFmt.ymd(Date()))
+            setJournal(d.hasColumns)
+        } catch is CancellationError {
+        } catch let e as APIDetailedError {
+            // Скрываем только «ручки нет» (404/405); другая ошибка пункт не меняет.
+            if e.status == 404 || API.isNoRoute(e) { setJournal(false) }
+        } catch {
+            // Единичный обрыв уже показанный пункт не прячет.
+        }
+    }
+
+    private func setJournal(_ on: Bool) {
+        journalOn = on
+        if !on && section == 3 { section = 0 }
     }
 }
 

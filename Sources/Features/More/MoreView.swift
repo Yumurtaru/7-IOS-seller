@@ -21,8 +21,6 @@ struct MoreView: View {
     @State private var pushReturns = false
     /// Раздел, открытый из push (router.openSection): "security" | "reservations".
     @State private var pushSection: String?
-    @State private var statusError: String?
-    @State private var statusBusy = false
     @State private var showLogoutConfirm = false
     @State private var pushDiag: String?
     @State private var pushDiagRunning = false
@@ -211,35 +209,9 @@ struct MoreView: View {
                     }
                 }
             } else if session.can("settings") {
-                Toggle(isOn: Binding(
-                    get: { session.shopStatus == "active" },
-                    set: { newValue in
-                        // Быстрое вкл/выкл слало два запроса, приходивших в разном порядке.
-                        guard !statusBusy else { return }
-                        statusBusy = true
-                        Task {
-                            defer { statusBusy = false }
-                            do {
-                                try await session.setShopStatus(newValue ? "active" : "paused")
-                                statusError = nil
-                            } catch {
-                                statusError = error.localizedDescription
-                            }
-                        }
-                    }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(session.shopStatus == "active" ? "Магазин открыт" : "Магазин на паузе")
-                            .font(.subheadline.weight(.semibold))
-                        Text("На паузе клиенты не могут оформлять заказы")
-                            .font(.caption).foregroundColor(Brand.muted)
-                    }
-                }
-                .tint(Brand.green)
-                .disabled(statusBusy)
-                if let err = statusError {
-                    Text(err).font(.footnote).foregroundColor(Brand.red)
-                }
+                // АZ: тумблер и окно «Пауза приёма заказов» — общий компонент (ShopPauseControl.swift),
+                // тот же, что в «Настройках магазина».
+                ShopStatusControl(titleFont: .subheadline.weight(.semibold))
             }
         }
         .listRowBackground(Brand.card)

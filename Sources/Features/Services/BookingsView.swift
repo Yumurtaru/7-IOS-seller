@@ -258,7 +258,7 @@ struct BookingRow: View {
 
     /// Статус ЗАПИСИ (она — женского рода): плашка «Принят»/«Выполнен» стояла рядом
     /// с чипом «Подтверждены» и кнопкой «Выполнена». Слова — те же, что в чипах.
-    private static func statusLabel(_ s: String?) -> String {
+    static func statusLabel(_ s: String?) -> String {
         switch s {
         case "new": return "Новая"
         case "accepted": return "Подтверждена"

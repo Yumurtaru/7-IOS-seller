@@ -36,6 +36,10 @@ final class ProductEditViewModel: ObservableObject {
     @Published var fats = ""
     @Published var carbs = ""
     @Published var status = "active"
+    /// ВВ (сайт А819): товар скрыт модератором площадки — переключатель видимости заблокирован,
+    /// статус в запрос не уходит (сервер оставит hidden). Ключей нет (старый сервер) — false.
+    @Published private(set) var moderationHidden = false
+    @Published private(set) var moderationReason = ""
     @Published var isAvailable = true
     /// Маркированный товар (Честный ЗНАК) — признак для кассы.
     @Published var isMarked = false
@@ -174,7 +178,9 @@ final class ProductEditViewModel: ObservableObject {
             proteins = p.proteins.map { "\($0)" } ?? ""
             fats = p.fats.map { "\($0)" } ?? ""
             carbs = p.carbs.map { "\($0)" } ?? ""
-            status = p.status ?? "active"
+            moderationHidden = p.moderationHidden == true
+            moderationReason = (p.moderationReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            status = moderationHidden ? "hidden" : (p.status ?? "active")
             isAvailable = p.isAvailable ?? true
             isMarked = p.isMarked ?? false
             photos = p.photos ?? []
@@ -235,7 +241,7 @@ final class ProductEditViewModel: ObservableObject {
         defer { isSaving = false }
         let art = article.trimmingCharacters(in: .whitespacesAndNewlines)
         let bc = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fields: [String: Any?] = [
+        var fields: [String: Any?] = [
             "name": n,
             "description": descriptionText.isEmpty ? nil : descriptionText,
             "category_id": categoryId,
@@ -257,6 +263,11 @@ final class ProductEditViewModel: ObservableObject {
             "is_available": isAvailable ? 1 : 0,
             "is_marked": isMarked ? 1 : 0,
         ]
+        // ВВ (А819): скрыт модератором — ключ статуса не шлём совсем (не null): сервер оставит hidden,
+        // а остальные поля сохранит.
+        if Bb.statusForSave(hidden: status == "hidden", moderationHidden: moderationHidden) == nil {
+            fields.removeValue(forKey: "status")
+        }
         do {
             // nil → явный null: makeRequest выкидывает nil-ключи (compactMapValues),
             // и сервер (saveProduct: «нет ключа — не трогаем») оставлял старое
@@ -530,6 +541,17 @@ struct ProductEditView: View {
             // Пока создание в пути или его исход неизвестен — поля заблокированы:
             // «Повторить» уходит тем же телом с тем же ключом повтора.
             Group {
+                // ВВ (сайт А819): бейдж «Скрыт модератором», причина и выход — поддержка.
+                if vm.moderationHidden {
+                    Section {
+                        Text(Bb.moderationBadge).font(.headline).foregroundColor(Brand.red)
+                        if let line = Bb.moderationReasonLine(vm.moderationReason) {
+                            Text(line).font(.subheadline)
+                        }
+                        Text(Bb.moderationNote).font(.footnote).foregroundColor(Brand.muted)
+                        NavigationLink(Bb.supportButton) { ShopSupportView() }
+                    }
+                }
                 Section("Основное") {
                     TextField("Название", text: $vm.name)
                     Picker("Тип", selection: $vm.type) {
@@ -548,6 +570,7 @@ struct ProductEditView: View {
                         Text("Активен").tag("active")
                         Text("Скрыт").tag("hidden")
                     }
+                    .disabled(vm.moderationHidden)
                     Toggle(isOn: $vm.isMarked) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Маркированный товар")

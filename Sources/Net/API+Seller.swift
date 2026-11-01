@@ -60,8 +60,16 @@ extension API {
         try await get("api/seller/me", as: MeResponse.self)
     }
 
-    func setShopStatus(_ status: String) async throws -> StatusAck {
-        try await post("api/seller/settings/status", body: ["status": status], as: StatusAck.self)
+    /// АZ (сайт А617): paused можно с сроком и причиной (pause_minutes | until="close", reason);
+    /// без pause — как раньше. Ответ {status, pause_until, pause_reason}: старый сервер последних
+    /// двух не шлёт (ShopStatusAck.hasPauseUntil == false).
+    /// ВВ (А819): отказ — APIDetailedError (текст тот же), чтобы увидеть код 409 admin_paused.
+    func setShopStatus(_ status: String, pause: ShopPauseRequest? = nil) async throws -> ShopStatusAck {
+        var body: [String: Any?] = ["status": status]
+        if let pause {
+            for (k, v) in pause.fields { body[k] = v }
+        }
+        return try await postDetailed("api/seller/settings/status", body: body, as: ShopStatusAck.self)
     }
 
     // ── Дашборд ──────────────────────────────────────────────────────────────

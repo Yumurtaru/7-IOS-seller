@@ -18,6 +18,20 @@ final class Session: ObservableObject {
     /// shops.mode: storefront | shop | restaurant — режим витрины, не тип.
     @Published private(set) var shopMode: String = "shop"
     @Published private(set) var shopStatus: String = "active"  // active | paused
+    /// АZ (сайт А617): сервер умеет паузу на время — в GET /settings есть ключ pause.
+    /// Нет ключа (старый сервер) — переключатель сразу ставит бессрочную паузу, как раньше.
+    @Published private(set) var pauseKnown = false
+    /// До какого времени (МСК, «ГГГГ-ММ-ДД ЧЧ:ММ:СС») пауза; nil — бессрочная или паузы нет.
+    @Published private(set) var pauseUntil: String?
+    @Published private(set) var pauseReason: String?
+    /// ВВ (сайт А819): паузу поставил АДМИНИСТРАТОР площадки (settings.pause.admin = true или 409 admin_paused) —
+    /// тумблер и окно паузы недоступны. Ключа нет (старый сервер) — false.
+    @Published private(set) var pauseAdmin = false
+    /// Настройки уже читали для этого магазина (проверка pause не нужна повторно).
+    private(set) var pauseChecked = false
+    /// Растёт, когда статус организации изменился НЕ нашим нажатием (список организаций, /me,
+    /// настройки после конца паузы): экран паузы сбрасывает старое сообщение и перечитывает срок.
+    @Published private(set) var externalStatusTick = 0
     @Published private(set) var shopName: String = ""
     /// shops.slug — из него собирается публичный адрес витрины (для QR и ссылок).
     @Published private(set) var shopSlug: String = ""
@@ -52,6 +66,9 @@ final class Session: ObservableObject {
     private var shopEpoch = 0
     /// Номер нажатия паузы: устаревший ответ /shops не перетирает новый статус.
     private var statusGen = 0
+    /// Номер нажатий паузы/возобновления — для чтений, которые не должны перебить свежее нажатие
+    /// (запоминают его до запроса, применяют ответ только при том же номере).
+    var statusGeneration: Int { statusGen }
     /// Почему открылся экран входа. Сессия истекла посреди работы — продавца
     /// молча выбрасывало на вход, и было непонятно, куда делась форма.
     @Published var signOutNotice: String?
@@ -207,6 +224,7 @@ final class Session: ObservableObject {
         shopType = "shop"
         shopMode = "shop"
         shopStatus = "active"
+        resetPause()
         shopName = ""
         shopSlug = ""
         OrderStatuses.shopType = "shop"
@@ -235,6 +253,7 @@ final class Session: ObservableObject {
         // начат до переключения магазина, возвращал прежний active_id, его тип
         // и имя — экраны нового магазина под названием прежнего.
         let shopEp = shopEpoch
+        let sg = statusGen
         booting = true
         bootError = nil
         defer { booting = false }
@@ -251,7 +270,7 @@ final class Session: ObservableObject {
             guard epoch == accountEpoch, shopEp == shopEpoch, isLoggedIn else { return }
             let prevType = shopType
             let prevPerms = permissions, prevOwner = isOwner
-            applyMe(me)
+            applyMe(me, statusGen: sg)
             // Тип магазина пришёл другим (холодный старт: до /me он «shop») —
             // экраны пересоздаём, иначе у кафе подписи статусов магазина.
             // Права другие (после смены магазина роль своя) — тоже: экраны,
@@ -288,7 +307,7 @@ final class Session: ObservableObject {
         // sg: пока шёл /shops, нажали паузу — старый ответ её не отменяет.
         if shopEp == shopEpoch, sg == statusGen, let id = activeShopId,
            let st = res.shops.first(where: { $0.shopId == id })?.status, !st.isEmpty {
-            shopStatus = st
+            applyExternalStatus(st)
         }
     }
 
@@ -303,11 +322,12 @@ final class Session: ObservableObject {
         guard Date().timeIntervalSince(permsRefreshedAt) > 60 else { return }
         permsRefreshedAt = Date()
         let epoch = accountEpoch, shopEp = shopEpoch
+        let sg = statusGen
         Task {
             guard let me = try? await API.shared.me() else { return }
             // Пока шёл запрос, вышли или сменили магазин — чужие права не пишем.
             guard epoch == self.accountEpoch, shopEp == self.shopEpoch, self.isLoggedIn else { return }
-            self.applyMe(me)
+            self.applyMe(me, statusGen: sg)
         }
     }
 
@@ -375,6 +395,7 @@ final class Session: ObservableObject {
     private func applySwitched(to id: Int) async {
         activeShopId = id
         shopEpoch += 1   // ответы, начатые до переключения, больше не применяются
+        resetPause()
         DeepLinkRouter.shared.reset()
         NewOrderPoller.shared.shopChanged()
         // Экраны пересоздаём сразу, а не после /me: пока шли ещё два запроса,
@@ -421,35 +442,149 @@ final class Session: ObservableObject {
         shopMode = mode.rawValue
     }
 
+    // ── АZ: пауза приёма на время ────────────────────────────────────────────
+    private func resetPause() {
+        pauseKnown = false
+        pauseUntil = nil
+        pauseReason = nil
+        pauseAdmin = false
+        pauseChecked = false
+    }
+
+    /// Статус пришёл «со стороны» (список организаций, /me): если он другой, срок и причина
+    /// прежней паузы устарели — сбрасываем и просим перечитать настройки (pauseChecked = false).
+    private func applyExternalStatus(_ st: String) {
+        if st != shopStatus {
+            pauseUntil = nil
+            pauseReason = nil
+            pauseAdmin = false   // статус сменил кто-то другой (в т.ч. администратор): метка устарела, настройки перечитают
+            pauseChecked = false
+            externalStatusTick += 1
+        }
+        shopStatus = st
+    }
+
+    /// Ответ GET /settings: pause != nil — сервер новый (срок и причина паузы), nil — старый.
+    /// ifGen — statusGeneration до запроса настроек: за время загрузки нажали паузу — ответ устарел.
+    func applyPause(_ pause: ShopPauseInfo?, ifGen gen: Int) {
+        guard gen == statusGen else { return }
+        applyPause(pause)
+    }
+
+    func applyPause(_ pause: ShopPauseInfo?) {
+        pauseChecked = true
+        if let pause {
+            pauseKnown = true
+            pauseUntil = (pause.until ?? "").isEmpty ? nil : pause.until
+            let r = (pause.reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            pauseReason = r.isEmpty ? nil : r
+            pauseAdmin = pause.admin
+        } else {
+            pauseKnown = false
+            pauseUntil = nil
+            pauseReason = nil
+            pauseAdmin = false
+        }
+    }
+
+    /// Перечитать настройки ради паузы и статуса: на «Ещё» их не читают, а срок паузы
+    /// кончается сам (крон сервера снимает её раз в минуту). Без права «Настройки» —
+    /// ручка закрыта (403), ничего не делаем.
+    /// Возвращает текст ошибки, если настройки прочитать не удалось (обрыв, сбой сервера); иначе nil.
+    @discardableResult
+    func refreshPause() async -> String? {
+        guard isLoggedIn, can("settings") else { return nil }
+        let acc = accountEpoch, shopEp = shopEpoch, sg = statusGen
+        let res: SettingsResponse
+        do {
+            res = try await API.shared.settings()
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+        guard acc == accountEpoch, shopEp == shopEpoch else { return nil }
+        // Нажатие в пути (statusGen) старым ответом не перебиваем — ни статус, ни срок паузы.
+        guard sg == statusGen else { return nil }
+        applyPause(res.pause)
+        // Крон снял паузу — статус «открыт».
+        if let st = res.shop?.status, st == "active" || st == "paused" {
+            if st != shopStatus { externalStatusTick += 1 }
+            shopStatus = st
+        }
+        return nil
+    }
+
     /// Пауза/возобновление приёма заказов. Оптимистично двигаем локальный статус,
     /// на ошибке откатываем. Возвращаем во вью, чтобы Toggle мог показать сбой.
-    func setShopStatus(_ status: String) async throws {
+    /// АZ: pause — срок и причина (окно «Пауза приёма заказов»); результат — сообщение
+    /// для экрана («Приём заказов на паузе до 18:20»), пустое у старого сервера.
+    @discardableResult
+    func setShopStatus(_ status: String, pause: ShopPauseRequest? = nil) async throws -> String {
         statusGen += 1
+        // Ещё раз по выходу (успех и ошибка): чтения, начатые во время POST, отбрасываются.
+        defer { statusGen += 1 }
         let previous = shopStatus
         let shopEp = shopEpoch, acc = accountEpoch
-        shopStatus = status
+        let knewPause = pauseKnown
+        // Паузу с окном не двигаем заранее: при отказе (422) окно остаётся, статус прежний.
+        if pause == nil { shopStatus = status }
         do {
-            let ack = try await API.shared.setShopStatus(status)
+            let ack = try await API.shared.setShopStatus(status, pause: pause)
             // Переключили магазин, пока шёл запрос: статус прежнего магазина
             // («на паузе»/«открыт») не пишем поверх статуса нового.
-            guard shopEp == shopEpoch, acc == accountEpoch else { return }
+            guard shopEp == shopEpoch, acc == accountEpoch else { return "" }
             // Сервер может вернуть фактический статус — доверяем ему, если пришёл.
-            if let s = ack.status, !s.isEmpty { shopStatus = s }
+            if let s = ack.status, !s.isEmpty { shopStatus = s } else { shopStatus = status }
+            pauseAdmin = false   // свою смену сервер принял — значит, паузы администратора нет
+            guard knewPause else { return "" }
+            if shopStatus == "paused" {
+                if ack.hasPauseUntil {
+                    pauseUntil = (ack.pauseUntil ?? "").isEmpty ? nil : ack.pauseUntil
+                    let r = (ack.pauseReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    pauseReason = r.isEmpty ? nil : r
+                    return Az.pausedMessage(until: pauseUntil)
+                }
+                // Сайт откатили: срок не принят, пауза бессрочная. До следующей загрузки
+                // настроек считаем, что сервер паузу на время не знает.
+                pauseUntil = nil
+                pauseReason = nil
+                if pause?.hasTerm == true {
+                    pauseKnown = false
+                    return Az.pausedWithoutTerm
+                }
+                return Az.pausedMessage(until: nil)
+            }
+            pauseUntil = nil
+            pauseReason = nil
+            return Az.resumedMessage
         } catch {
-            if shopEp == shopEpoch && acc == accountEpoch { shopStatus = previous }
+            if shopEp == shopEpoch && acc == accountEpoch {
+                if Bb.isAdminPaused(error) {
+                    // ВВ (А819): 409 admin_paused — фактически магазин на паузе администратора: тумблер
+                    // возвращаем в это состояние (не в прежнее «открыт» из устаревших данных), текст сервера уйдёт на экран.
+                    shopStatus = "paused"
+                    pauseAdmin = true
+                    pauseChecked = false
+                    externalStatusTick += 1   // экран перечитает срок и причину
+                } else {
+                    shopStatus = previous
+                }
+            }
             throw error
         }
     }
 
     /// Раскладываем GET /api/seller/me: тип/статус/имя организации и права роли.
-    private func applyMe(_ me: MeResponse) {
+    /// sg — statusGen до запроса /me: нажатие паузы за это время старым статусом не перебиваем.
+    private func applyMe(_ me: MeResponse, statusGen sg: Int) {
         if let shop = me.shop {
             if let t = shop.type, !t.isEmpty {
                 shopType = t; OrderStatuses.shopType = t
                 UserDefaults.standard.set(t, forKey: "seller_shop_type")
             }
             if let m = shop.mode, !m.isEmpty { shopMode = m }
-            if let s = shop.status, !s.isEmpty { shopStatus = s }
+            if sg == statusGen, let s = shop.status, !s.isEmpty { applyExternalStatus(s) }
             if let n = shop.name, !n.isEmpty { shopName = n }
             if let sl = shop.slug, !sl.isEmpty { shopSlug = sl }
         }

@@ -356,6 +356,8 @@ struct PoolView: View {
         let owes = (c.courierOwes ?? 0) > 0
         let shopOwes = (c.shopOwes ?? 0) > 0
         let canWork = session.can("orders")
+        // ВВ (сайт А750 №7): расчёты (settle/confirm/reject) — только с правом «Курьеры».
+        let canCouriers = session.can("couriers")
         return SectionCard {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -419,11 +421,14 @@ struct PoolView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Курьер пишет, что отдал вам " + Money.rub(abs(e.amount ?? 0)) + " (" + PoolFmt.short(e.createdAt) + ").")
                         .font(.footnote).foregroundColor(Brand.text)
-                    if canWork, let eid = e.id {
+                    if canWork, canCouriers, let eid = e.id {
                         HStack(spacing: 8) {
                             smallButton("Получили", primary: true) { Task { await moneyVM.decide(entryId: eid, approve: true) } }
                             smallButton("Не получали", primary: false) { Task { await moneyVM.decide(entryId: eid, approve: false) } }
                         }
+                    } else if canWork, !canCouriers {
+                        // ВВ (сайт А750 №7): без права «Курьеры» кнопок нет (сервер ответит 403) — говорим, кто может подтвердить.
+                        Text(Bb.couriersRightHint).font(.caption).foregroundColor(Brand.muted)
                     }
                 }
                 .padding(10)
@@ -435,7 +440,7 @@ struct PoolView: View {
                 Text("Ждёт подтверждения курьера: отдали " + Money.rub(e.amount))
                     .font(.caption).foregroundColor(Brand.muted)
             }
-            if canWork {
+            if canWork && canCouriers {
                 HStack(spacing: 8) {
                     smallButton("Получили деньги", primary: false) {
                         settle = PoolSettleTarget(courierId: c.id, name: c.name ?? "Курьер", kind: "cash_received",

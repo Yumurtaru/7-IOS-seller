@@ -785,9 +785,14 @@ struct ProductSummary: Decodable, Identifiable {
     var unit: String?
     /// Стоп до (время сервера, «Y-m-d H:i:s»); null при stopped — бессрочно.
     var stopUntil: String?
+    /// ВВ (сайт А819): скрыт модератором площадки + причина. Ключей нет (старый сервер) — nil.
+    @LenientBool var moderationHidden: Bool?
+    var moderationReason: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, article, barcode, price, type, status, category, photo, stopped, unit
+        case moderationHidden = "moderation_hidden"
+        case moderationReason = "moderation_reason"
         case priceOld = "price_old"
         case isAvailable = "is_available"
         case categoryId = "category_id"
@@ -828,10 +833,15 @@ struct ProductDetail: Decodable {
     // роняли всю карточку товара. Разбираем без потери тегов.
     @LenientTagList var tags: [String]?
     @LenientTagList var allergens: [String]?
+    /// ВВ (сайт А819): скрыт модератором площадки + причина. Ключей нет (старый сервер) — nil.
+    @LenientBool var moderationHidden: Bool?
+    var moderationReason: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, type, price, unit, weight, article, barcode
         case calories, proteins, fats, carbs, status, photos, tags, allergens
+        case moderationHidden = "moderation_hidden"
+        case moderationReason = "moderation_reason"
         case categoryId = "category_id"
         case priceOld = "price_old"
         case isAvailable = "is_available"
@@ -1369,6 +1379,8 @@ struct SettingsResponse: Decodable {
     var shop: ShopSettings?
     /// Блок notifications (telegram_chat_id + events) — модель в Models+Phase2.swift.
     var notifications: NotificationSettings?
+    /// АZ (сайт А617): ключ pause есть — сервер умеет паузу приёма на время. Нет — старый сервер.
+    var pause: ShopPauseInfo?
 }
 
 struct ShopSettings: Decodable {
@@ -1446,6 +1458,22 @@ struct AffectedAck: Decodable {
     /// Массовое удаление: товары с остатком на складе сервер пропускает и
     /// объясняет это текстом (seller_products.php: skipped_with_stock + message).
     var message: String?
+    /// ВВ (сайт А819): «Показать» пропустило товары, скрытые модератором, — их id
+    /// (message — текст сервера). Ключа нет (старый сервер) — nil.
+    var moderationBlocked: [Int]?
+
+    enum CodingKeys: String, CodingKey {
+        case affected, message
+        case moderationBlocked = "moderation_blocked"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        _affected = try c.decode(LenientInt.self, forKey: .affected)
+        message = (try? c.decodeIfPresent(String.self, forKey: .message)) ?? nil
+        moderationBlocked = ((try? c.decodeIfPresent([LenientInt].self, forKey: .moderationBlocked)) ?? nil)?
+            .compactMap { $0.wrappedValue }
+    }
 }
 
 /// generateSlots → число созданных слотов.

@@ -499,7 +499,8 @@ struct PoolCallCard: View {
                 if a?.rate == true && (call.rating ?? 0) == 0 {
                     actionButton("Оценить курьера", style: .secondary) { showRate = true }
                 }
-                if a?.problem == true {
+                // ВВ (сайт А750 №7): «Проблема с доставкой» — только с правом «Курьеры» (без него сервер ответит 403).
+                if a?.problem == true && Session.shared.can("couriers") {
                     actionButton("Проблема с доставкой", style: .plain) { showProblem = true }
                 }
                 // А81: жалоба на поведение курьера — без денег (деньги — «Проблема с доставкой»).
@@ -839,6 +840,8 @@ struct PoolCallSheet: View {
             Section("Куда") {
                 Text(addr + (PoolFmt.km(d?.distanceKm).map { " · ~" + $0 } ?? ""))
                     .font(.subheadline)
+                // ВВ (сайт А750 №6): «Адрес вне города — выберите «Межгород»» — под адресом заказа текстом сервера.
+                fieldError("drop_address")
             }
         }
         if q.cargoSupported {
@@ -1475,6 +1478,8 @@ struct PoolProblemSheet: View {
     @State private var showLibrary = false
     @State private var busy = false
     @State private var error: String?
+    /// ВВ (А750 №3): 422 errors.amount — «Не больше … — стоимость товара и доставки по этому вызову», у поля суммы.
+    @State private var amountError: String?
 
     var body: some View {
         NavigationStack {
@@ -1488,12 +1493,23 @@ struct PoolProblemSheet: View {
                     TextField(reason == "other" ? "Опишите, что случилось" : "Подробности", text: $comment, axis: .vertical)
                         .lineLimit(2...5)
                 }
-                Section {
-                    TextField("0 — без возмещения", text: $amount).keyboardType(.decimalPad)
-                } header: {
-                    Text("Сумма к возмещению курьером, ₽")
-                } footer: {
-                    Text("Сумма сразу ложится в долг курьера. Курьер получит уведомление, окончательное решение — за администратором площадки.")
+                if Bb.problemShowsAmount(reason: reason) {
+                    Section {
+                        TextField("0 — без возмещения", text: $amount).keyboardType(.decimalPad)
+                            .onChange(of: amount) { _ in amountError = nil }
+                        if let ae = amountError { Text(ae).font(.footnote).foregroundColor(Brand.red) }
+                    } header: {
+                        Text("Сумма к возмещению курьером, ₽")
+                    } footer: {
+                        Text("Сумма сразу ложится в долг курьера. Курьер получит уведомление, окончательное решение — за администратором площадки.")
+                    }
+                } else {
+                    // ВВ (А750 №3): у «Не сдал деньги» поля суммы нет и сумма не уходит — деньги идут через расчёты.
+                    Section {
+                        Text(Bb.problemMoneyHint).font(.footnote).foregroundColor(Brand.muted)
+                    } footer: {
+                        Text("Курьер получит уведомление, окончательное решение — за администратором площадки.")
+                    }
                 }
                 Section("Фото (необязательно)") {
                     if let photo {
@@ -1542,10 +1558,15 @@ struct PoolProblemSheet: View {
 
     private func send() {
         error = nil
+        amountError = nil
         let text = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         if reason == "other" && text.isEmpty { error = "Опишите, что случилось"; return }
         let sum = PoolFmt.money(amount) ?? "0"
-        guard Money.strict(sum) != nil else { error = "Проверьте сумму возмещения"; return }
+        // ВВ (А750 №3): для «Не сдал деньги» сумма не слается вовсе (nil — ключа amount нет).
+        let sendAmount = Bb.problemAmountToSend(reason: reason, amount: sum)
+        if sendAmount != nil {
+            guard Money.strict(sum) != nil else { error = "Проверьте сумму возмещения"; return }
+        }
         let picked = photo
         busy = true
         Task { @MainActor in
@@ -1553,12 +1574,17 @@ struct PoolProblemSheet: View {
             let jpeg = await Task.detached(operation: { picked.flatMap { ImageCompressor.jpegForUpload($0) } }).value
             do {
                 let updated = try await API.shared.poolProblem(id: callId, reason: reason, comment: String(text.prefix(500)),
-                                                               amount: sum, photoJPEG: jpeg)
+                                                               amount: sendAmount, photoJPEG: jpeg)
                 busy = false
                 onDone(updated)
                 dismiss()
             } catch {
                 busy = false
+                // 422: текст у поля суммы (errors.amount), общий текст сервера — внизу формы.
+                if let e = error as? APIDetailedError, e.status == 422, let t = e.fields["amount"]?.first,
+                   !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    amountError = t
+                }
                 self.error = error.localizedDescription
             }
         }

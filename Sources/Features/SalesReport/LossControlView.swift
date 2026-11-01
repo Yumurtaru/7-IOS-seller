@@ -28,6 +28,14 @@ final class LossControlViewModel: ObservableObject {
     @Published private(set) var rule = ""
     /// Лента до 300 операций — показываем порциями.
     @Published var visible = 50
+    /// АZ (сайт А617): фильтр разбора — "" все, "open" не разобраны, "ok" норма, "violation" нарушения.
+    /// Параметр review запроса; сочетается с периодом и правилом.
+    @Published private(set) var reviewFilter = ""
+    /// Отметка в пути: двойной тап не шлёт второй запрос.
+    @Published private(set) var reviewBusy = false
+    /// Сообщение после отметки («Отмечено: норма») и текст ошибки (403/422/503, обрыв).
+    @Published var reviewNotice: String?
+    @Published var reviewError: String?
 
     /// Номер запроса: ответ по прежнему периоду или фильтру не рисуем.
     private var gen = 0
@@ -40,7 +48,41 @@ final class LossControlViewModel: ObservableObject {
         Task { await load() }
     }
 
-    func load() async {
+    func setReviewFilter(_ f: String) {
+        guard f != reviewFilter else { return }
+        reviewFilter = f
+        Task { await load() }
+    }
+
+    /// АZ: поставить / снять отметку у одной операции или у списка (keys). status: "ok" | "violation" | "".
+    /// Возвращает nil при успехе (экран перечитан), иначе текст ошибки. Локально ничего не меняем:
+    /// индекс, счётчики и списки считает сервер — после успеха перечитываем экран.
+    /// report: false — ошибку показывает само окно (оно остаётся открытым), общий alert не нужен.
+    func review(key: String? = nil, keys: [String]? = nil, status: String, note: String? = nil,
+                report: Bool = true) async -> String? {
+        guard !reviewBusy else { return "Предыдущая отметка ещё сохраняется — подождите секунду" }
+        reviewBusy = true
+        reviewError = nil
+        reviewNotice = nil
+        defer { reviewBusy = false }
+        do {
+            let ack = try await API.shared.reviewLoss(key: key, keys: keys, status: status, note: note)
+            reviewNotice = Az.reviewDoneMessage(status: status, bulk: keys != nil, count: ack.count)
+        } catch is CancellationError {
+            let text = "Запрос прерван — повторите"
+            if report { reviewError = text }
+            return text
+        } catch {
+            let text = error.localizedDescription
+            if report { reviewError = text }
+            return text
+        }
+        await load(keepVisible: true)
+        return nil
+    }
+
+    /// keepVisible: после отметки не сворачиваем раскрытую ленту («Показать ещё»).
+    func load(keepVisible: Bool = false) async {
         gen += 1
         let my = gen
         guard var q = sel.query else {
@@ -50,6 +92,7 @@ final class LossControlViewModel: ObservableObject {
             return
         }
         if !rule.isEmpty { q["rule"] = rule }
+        if !reviewFilter.isEmpty { q["review"] = reviewFilter }
         if data == nil { state = .loading }
         loading = true
         let r = await SR.fetch { try await API.shared.lossControl(q) }
@@ -59,7 +102,7 @@ final class LossControlViewModel: ObservableObject {
         case .ok(let d):
             data = d
             shownQuery = q
-            visible = 50
+            if !keepVisible { visible = 50 }
             state = .loaded
             SalesReportFeature.shared.note(loss: true, shop: Session.shared.activeShopId)
         case .hidden(let text), .failed(let text):
@@ -75,6 +118,11 @@ final class LossControlViewModel: ObservableObject {
 struct LossControlView: View {
     @EnvironmentObject var session: Session
     @StateObject private var vm = LossControlViewModel()
+    /// АZ: «Нарушение…» — окно с описанием (один .sheet(item:) на вью).
+    @State private var violationTarget: ViolationTarget?
+    /// АZ: «Все показанные — норма» — ключи, ожидающие подтверждения.
+    @State private var bulkAsk = false
+    @State private var bulkPending: [String] = []
 
     /// Порядок правил — как в таблице API (словарь JSON порядка не хранит).
     private static let ruleOrder = ["big_refund", "no_receipt", "void_paid", "after_prebill", "pin", "shortage",
@@ -100,6 +148,8 @@ struct LossControlView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
+            // АZ: ошибка отметки (403/422/503, обрыв) — на другом узле, чем alert подтверждения ниже.
+            .errorAlert($vm.reviewError)
         }
         .background(Brand.bg.ignoresSafeArea())
         .navigationTitle("Контроль потерь")
@@ -114,6 +164,20 @@ struct LossControlView: View {
                    emptyIcon: "checkmark.shield", emptyTitle: "Подозрительных операций нет — хороший знак.",
                    retry: { Task { await vm.load() } })
         .task { if vm.state != .loaded { await vm.load() } }
+        .sheet(item: $violationTarget) { target in
+            LossViolationSheet { note in
+                await vm.review(key: target.key, status: "violation", note: note, report: false)
+            }
+        }
+        .alert("Отметить нормой \(bulkPending.count) операций?", isPresented: $bulkAsk) {
+            Button("Отметить") {
+                let keys = bulkPending
+                if !keys.isEmpty { Task { _ = await vm.review(keys: keys, status: "ok") } }
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Они перестанут влиять на индекс риска.")
+        }
     }
 
     @ViewBuilder
@@ -299,6 +363,7 @@ struct LossControlView: View {
         let all = (d.counts?.total ?? 0) + (d.counts?.owner ?? 0)
         let shown = Array(d.incidents.prefix(vm.visible))
         return SectionCard(title: "Подозрительные операции") {
+            reviewHeader(d)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     FilterChip(title: "Все · \(all)", selected: vm.rule.isEmpty) { vm.setRule("") }
@@ -310,13 +375,13 @@ struct LossControlView: View {
                 }
             }
             if d.incidents.isEmpty {
-                Text("Подозрительных операций нет — хороший знак.")
+                Text(emptyIncidentsText(d))
                     .font(.subheadline).foregroundColor(Brand.muted)
             } else {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(shown.enumerated()), id: \.offset) { i, inc in
                         if i > 0 { Divider().overlay(Brand.border) }
-                        incidentRow(inc)
+                        incidentRow(inc, reviewsOn: d.reviewsEnabled == true)
                     }
                 }
                 if d.incidents.count > vm.visible {
@@ -332,6 +397,92 @@ struct LossControlView: View {
         }
     }
 
+    /// Пустая лента: при фильтре разбора — свой текст, без фильтра — прежний.
+    private func emptyIncidentsText(_ d: LossControl) -> String {
+        switch vm.reviewFilter {
+        case "open":
+            let done = (d.counts?.reviewedOk ?? 0) + (d.counts?.violations ?? 0)
+            return done > 0 ? "Все операции разобраны." : "Подозрительных операций нет — хороший знак."
+        case "ok", "violation":
+            return "Нет операций с такой отметкой."
+        default:
+            return "Подозрительных операций нет — хороший знак."
+        }
+    }
+
+    // ── АZ: разбор операций ──────────────────────────────────────────────────
+    /// Подсказка (сервер без таблицы отметок), чипы разбора и «Все показанные — норма».
+    /// Ключа reviews_enabled нет (старый сервер) — ничего не рисуем.
+    @ViewBuilder
+    private func reviewHeader(_ d: LossControl) -> some View {
+        if d.reviewsEnabled == false {
+            Text("Разбор операций пока недоступен на сервере.")
+                .font(.footnote).foregroundColor(Brand.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if d.reviewsEnabled == true {
+            let c = d.counts
+            let counts: [String: Int] = ["": 0, "open": c?.unreviewed ?? 0, "ok": c?.reviewedOk ?? 0,
+                                         "violation": c?.violations ?? 0]
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Az.reviewFilters, id: \.0) { f in
+                        FilterChip(title: f.code.isEmpty ? f.title : f.title + " · \(counts[f.code] ?? 0)",
+                                   selected: vm.reviewFilter == f.code) {
+                            vm.setReviewFilter(f.code)
+                        }
+                    }
+                }
+            }
+            if let n = vm.reviewNotice {
+                Text(n).font(.footnote.weight(.semibold)).foregroundColor(Brand.green)
+            }
+            let keys = Az.bulkKeys(d.incidents)
+            if !keys.isEmpty {
+                Button("Все показанные — норма") { bulkPending = keys; bulkAsk = true }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(Brand.accent)
+                    .disabled(vm.reviewBusy)
+            }
+        }
+    }
+
+    /// Метка отметки («Норма» зелёная / «Нарушение» красная), заметка и «{by}, ДД.ММ ЧЧ:ММ».
+    @ViewBuilder
+    private func reviewMark(_ r: LossReview) -> some View {
+        if let label = Az.reviewLabel(r.status) {
+            VStack(alignment: .leading, spacing: 2) {
+                StatusBadge(text: label, color: r.status == "ok" ? Brand.green : Brand.red)
+                if let note = r.note, !note.isEmpty {
+                    Text(note).font(.caption).foregroundColor(Brand.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                let meta = Az.reviewMeta(by: r.by, at: r.at)
+                if !meta.isEmpty {
+                    Text(meta).font(.caption2).foregroundColor(Brand.muted)
+                }
+            }
+        }
+    }
+
+    /// Действия над операцией с непустым key: «Норма», «Нарушение…», у размеченной ещё «Снять отметку».
+    @ViewBuilder
+    private func reviewActions(_ i: LossIncident, reviewsOn: Bool) -> some View {
+        // Как на сайте: у операций владельца разбора нет.
+        if reviewsOn, i.owner != true, let key = i.key, !key.isEmpty {
+            Menu {
+                Button("Норма") { Task { _ = await vm.review(key: key, status: "ok") } }
+                Button("Нарушение…") { violationTarget = ViolationTarget(key: key) }
+                if i.review != nil {
+                    Button("Снять отметку", role: .destructive) { Task { _ = await vm.review(key: key, status: "") } }
+                }
+            } label: {
+                Label("Разбор", systemImage: "ellipsis.circle").font(.caption.weight(.semibold))
+            }
+            .foregroundColor(Brand.accent)
+            .disabled(vm.reviewBusy)
+        }
+    }
+
     /// «Показаны первые 300 из N — …»: список на сервере обрезан (А86, П-39 №2).
     private func shownOfTotal(_ shown: Int, _ total: Int, hint: String) -> some View {
         Text("Показаны первые \(shown) из \(total) — " + hint)
@@ -340,7 +491,7 @@ struct LossControlView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func incidentRow(_ i: LossIncident) -> some View {
+    private func incidentRow(_ i: LossIncident, reviewsOn: Bool = false) -> some View {
         let sev = SR.severity(i.severity)
         var head = Text(i.title ?? "—").fontWeight(.bold)
         if let actor = i.actor, !actor.isEmpty { head = head + Text(" · " + actor) }
@@ -374,6 +525,8 @@ struct LossControlView: View {
                 Text(advice).font(.caption).foregroundColor(Brand.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if reviewsOn, let r = i.review { reviewMark(r) }
+            reviewActions(i, reviewsOn: reviewsOn)
         }
     }
 
@@ -403,5 +556,80 @@ struct LossControlView: View {
                 .tint(Brand.accent)
             }
         }
+    }
+}
+
+
+/// АZ: для .sheet(item:) — операция, у которой ставят отметку «Нарушение».
+struct ViolationTarget: Identifiable {
+    let key: String
+    var id: String { key }
+}
+
+/// АZ: окно «Опишите нарушение» — поле обязательное (до 500 знаков), «Сохранить» неактивна при пустом.
+struct LossViolationSheet: View {
+    /// Возвращает nil при успехе, иначе текст ошибки (окно остаётся открытым).
+    let onSave: (String) async -> String?
+
+    init(onSave: @escaping (String) async -> String?) { self.onSave = onSave }
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var note = ""
+    @State private var busy = false
+    @State private var error: String?
+
+    private var trimmed: String { note.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Что именно нарушено", text: $note, axis: .vertical)
+                        .lineLimit(3...8)
+                        .onChange(of: note) { value in
+                            if value.count > 500 { note = String(value.prefix(500)) }
+                        }
+                } footer: {
+                    Text("Это увидят при следующей проверке")
+                }
+                .listRowBackground(Brand.card)
+                if let err = error {
+                    Section { Text(err).font(.footnote).foregroundColor(Brand.red) }
+                        .listRowBackground(Color.clear)
+                }
+                Section {
+                    Button {
+                        Task { await save() }
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if busy { ProgressView() }
+                            Text("Сохранить").font(.headline)
+                            Spacer()
+                        }
+                    }
+                    .disabled(trimmed.isEmpty || busy)
+                    Button("Отмена", role: .cancel) { dismiss() }
+                        .frame(maxWidth: .infinity)
+                        .disabled(busy)
+                }
+                .listRowBackground(Brand.card)
+            }
+            .scrollContentBackground(.hidden)
+            .background(Brand.bg.ignoresSafeArea())
+            .navigationTitle("Опишите нарушение")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(busy)
+    }
+
+    private func save() async {
+        guard !busy, !trimmed.isEmpty else { return }
+        busy = true
+        error = nil
+        let failure = await onSave(String(trimmed.prefix(500)))
+        busy = false
+        if let failure { error = failure } else { dismiss() }
     }
 }

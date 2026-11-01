@@ -31,6 +31,12 @@ final class OrdersViewModel: ObservableObject {
     }
     /// Поиск, с которым загружен список (?search=); "" — без поиска.
     @Published private(set) var appliedSearch = ""
+    /// ВА (сайт А618): порядок списка. «Сначала старые» → ?sort=old; пункт выбора виден,
+    /// только если в последнем ответе есть meta.sort (sortAvailable).
+    @Published var sort: OrderSort = .new {
+        didSet { if sort != oldValue { items = []; state = .loading; gen += 1; Task { await reload() } } }
+    }
+    @Published private(set) var sortAvailable = false
     private var searchTask: Task<Void, Never>?
     private var page = 1
     @Published private(set) var hasMore = false
@@ -95,6 +101,21 @@ final class OrdersViewModel: ObservableObject {
         }
     }
 
+    /// ВА: сверка meta ответа с отправленным (каждая страница — первая, догрузка, перечитывание).
+    /// false — ответ не годится: просили «Сначала старые», а сервер откатили; выбор уже сброшен
+    /// на «Сначала новые» (didSet перечитает список), вызывающий выходит.
+    /// Поиск заказов на сервере есть с А116, а meta — только с А618: без meta.search поиск
+    /// всё равно работает, поэтому отсутствие ключа здесь не трогаем.
+    private func acceptMeta(_ meta: [String: Any], sentSort: OrderSort) -> Bool {
+        sortAvailable = Ba.sortAvailable(meta)
+        if Ba.sortRolledBack(sent: sentSort, meta: meta) {
+            sortAvailable = false
+            sort = .new
+            return false
+        }
+        return true
+    }
+
     /// Сколько строк пришло первой страницей — чтобы при мягком обновлении
     /// заменить именно её, а догруженные страницы оставить.
     private var firstPageCount = 0
@@ -107,9 +128,13 @@ final class OrdersViewModel: ObservableObject {
         let myGen = gen
         moreError = nil
         if items.isEmpty { state = .loading }
+        let sentSort = sort
+        let sentSearch = searchParam
         do {
-            let res = try await API.shared.orders(status: statusFilter, payment: paymentFilter, date: dateParam, search: searchParam, page: 1)
+            let (res, meta) = try await API.shared.ordersPage(status: statusFilter, payment: paymentFilter, date: dateParam,
+                                                              search: sentSearch, sort: sentSort, page: 1)
             guard myGen == gen else { return }
+            guard acceptMeta(meta, sentSort: sentSort) else { return }
             if keepPages && page > 1 {
                 // Перечитываем ВСЕ загруженные страницы: склейка «новая первая +
                 // старый хвост» теряла строки на стыке, когда приходили новые
@@ -119,8 +144,10 @@ final class OrdersViewModel: ObservableObject {
                 var p = 1
                 while p < page, more {
                     p += 1
-                    let r = try await API.shared.orders(status: statusFilter, payment: paymentFilter, date: dateParam, search: searchParam, page: p)
+                    let (r, rMeta) = try await API.shared.ordersPage(status: statusFilter, payment: paymentFilter, date: dateParam,
+                                                                     search: sentSearch, sort: sentSort, page: p)
                     guard myGen == gen else { return }
+                    guard acceptMeta(rMeta, sentSort: sentSort) else { return }
                     all += r.items
                     more = r.hasMore ?? false
                 }
@@ -138,7 +165,8 @@ final class OrdersViewModel: ObservableObject {
             // Под фильтром «за день» (например, вчера) новых заказов на экране нет —
             // звонок нового заказа не гасим.
             // Под поиском — тоже: в выдаче поиска нового заказа может не быть.
-            if dateFilter == nil && appliedSearch.isEmpty { NewOrderPoller.shared.acknowledge() }
+            // «Сначала старые» — тоже: новый заказ окажется в конце списка, не на виду.
+            if dateFilter == nil && appliedSearch.isEmpty && sentSort == .new { NewOrderPoller.shared.acknowledge() }
         } catch is CancellationError {
         } catch {
             guard myGen == gen else { return }
@@ -152,9 +180,13 @@ final class OrdersViewModel: ObservableObject {
         defer { loadingMore = false }
         let myGen = gen
         moreError = nil
+        let sentSort = sort
+        let sentSearch = searchParam
         do {
-            let res = try await API.shared.orders(status: statusFilter, payment: paymentFilter, date: dateParam, search: searchParam, page: page + 1)
+            let (res, meta) = try await API.shared.ordersPage(status: statusFilter, payment: paymentFilter, date: dateParam,
+                                                              search: sentSearch, sort: sentSort, page: page + 1)
             guard myGen == gen else { return }
+            guard acceptMeta(meta, sentSort: sentSort) else { return }
             page += 1
             // Смещение страниц «плывёт», когда появляются новые записи: одна и та же
             // запись может прийти дважды, а дубли id ломают ForEach.
@@ -226,9 +258,22 @@ struct OrdersView: View {
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("Заказы")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $vm.search, prompt: "Номер, телефон или имя")
+            .searchable(text: $vm.search, prompt: Ba.searchPlaceholder)
             .toolbar {
                 ToolbarItem(placement: .principal) { ShopSwitcherMenu() }
+                // ВА: порядок списка — только когда сервер его знает (в ответе есть meta.sort).
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if vm.sortAvailable {
+                        Menu {
+                            Picker("Порядок", selection: $vm.sort) {
+                                ForEach(OrderSort.allCases) { o in Text(o.title).tag(o) }
+                            }
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down")
+                        }
+                        .accessibilityLabel("Порядок заказов")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showDatePicker = true } label: {
                         Image(systemName: vm.dateFilter == nil ? "calendar" : "calendar.badge.clock")

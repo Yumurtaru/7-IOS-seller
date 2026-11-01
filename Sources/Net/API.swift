@@ -747,7 +747,7 @@ final class API {
     /// нескольких мегабайт на медленной сети не укладывался в обычные 60 с.
     func uploadForm<T: Decodable>(_ path: String, fields: [String: String],
                                   fileField: String, filename: String, mime: String, fileData: Data,
-                                  idempotencyKey: String?, as type: T.Type) async throws -> T {
+                                  idempotencyKey: String?, detailed: Bool = false, as type: T.Type) async throws -> T {
         let boundary = "yumurta-" + UUID().uuidString
         var req = try baseRequest("POST", path)
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -773,7 +773,7 @@ final class API {
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         req.httpBody = body
         req.timeoutInterval = 90
-        return try await perform(req, as: type, using: longSession)
+        return try await perform(req, as: type, using: longSession, detailed: detailed)
     }
 
     /// Диагностика push: сервер шлёт уведомление на все токены этого пользователя

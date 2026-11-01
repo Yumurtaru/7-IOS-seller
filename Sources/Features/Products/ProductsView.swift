@@ -314,7 +314,9 @@ final class ProductsViewModel: ObservableObject {
             await reload()
             // Товары с остатком сервер не удаляет и пишет почему — раньше это
             // молча терялось, и товары оставались в списке без объяснения.
-            if let msg = ack.message, !msg.isEmpty { actionError = msg }
+            // ВВ (А819): «Показать» пропустило скрытые модератором — текст сервера (message) дословно;
+            // список уже перечитан, эти товары остаются скрытыми.
+            if let msg = Bb.bulkNotice(message: ack.message, blocked: ack.moderationBlocked) { actionError = msg }
         } catch {
             actionError = error.localizedDescription
         }
@@ -778,7 +780,10 @@ struct ProductRow: View {
                     if let art = product.article, !art.isEmpty {
                         Text("арт. " + art).font(.caption2).foregroundColor(Brand.muted).lineLimit(1)
                     }
-                    if product.status == "hidden" {
+                    if product.moderationHidden == true {
+                        // ВВ (А819): снят модератором площадки — продавец вернуть не может.
+                        StatusBadge(text: Bb.moderationBadge, color: Brand.red)
+                    } else if product.status == "hidden" {
                         StatusBadge(text: "Скрыт", color: Brand.muted)
                     }
                     if product.stopped == true {

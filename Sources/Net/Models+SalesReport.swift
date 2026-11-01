@@ -300,6 +300,9 @@ struct LossControl: Decodable {
     @LenientString var level: String?
     @LenientString var levelLabel: String?
     @SRObject var counts: LossCounts?
+    /// АZ (сайт А617): ключ есть — сервер знает разбор операций; false — таблица отметок недоступна.
+    /// Нет ключа — nil, ничего нового не показываем.
+    @LenientBool var reviewsEnabled: Bool?
     /// Без операций владельца.
     @SRIntMap var byRule: [String: Int]?
     /// С операциями владельца — столько строк покажет фильтр rule (чипы).
@@ -322,6 +325,7 @@ struct LossControl: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case enabled, period, index, level, counts, truncated, kpi, actors, incidents, top, trend, rules
+        case reviewsEnabled = "reviews_enabled"
         case levelLabel = "level_label"
         case byRule = "by_rule"
         case byRuleAll = "by_rule_all"
@@ -339,6 +343,15 @@ struct LossCounts: Decodable {
     @LenientInt var info: Int?
     @LenientInt var total: Int?
     @LenientInt var owner: Int?
+    /// АZ: сколько операций не разобрано / отмечено нормой / нарушением (без операций владельца).
+    @LenientInt var unreviewed: Int?
+    @LenientInt var reviewedOk: Int?
+    @LenientInt var violations: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case critical, warning, info, total, owner, unreviewed, violations
+        case reviewedOk = "reviewed_ok"
+    }
 }
 
 struct LossKpi: Decodable {
@@ -435,9 +448,13 @@ struct LossIncident: Decodable {
     @LenientInt var auditId: Int?
     /// Операция владельца: в ленте, но не в индексе и счётчиках.
     @LenientBool var owner: Bool?
+    /// АZ: ключ операции для POST /loss-control/review — хранить как есть, не разбирать.
+    @LenientString var key: String?
+    /// АZ: отметка продавца; nil — не разобрана.
+    @SRObject var review: LossReview?
 
     enum CodingKeys: String, CodingKey {
-        case rule, title, severity, detail, advice, actor, amount, at, owner
+        case rule, title, severity, detail, advice, actor, amount, at, owner, key, review
         case actorKey = "actor_key"
         case orderId = "order_id"
         case receiptNumber = "receipt_number"

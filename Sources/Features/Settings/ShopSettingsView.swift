@@ -7,6 +7,8 @@ import SwiftUI
 //   • статус active/paused POST /settings/status (большой тумблер)
 //   • окно возвратов POST /settings/returns (1–72 ч)
 //   • уведомления Telegram POST /settings/notifications
+//   • АZ: Telegram одной кнопкой (GET /settings/telegram, POST /settings/telegram/link) и
+//     пауза приёма на время (окно «Пауза приёма заказов» — ShopPauseControl.swift)
 //   • оплата и часы работы — отдельные экраны (PaymentSettingsView, HoursSettingsView)
 // ============================================================================
 
@@ -35,6 +37,20 @@ final class ShopSettingsViewModel: ObservableObject {
     /// менять чат может только владелец (А116), прежнее значение сервер принимает.
     private var loadedChatId = ""
     @Published var tgEvents: Set<String> = []
+
+    // ── АZ (сайт А617): Telegram одной кнопкой ───────────────────────────────
+    /// Состояние подключения с сервера. nil — блока нет (старый сервер, 404/405 или любая ошибка):
+    /// остаётся только ручное поле chat_id.
+    @Published var tg: TelegramState?
+    /// Выданный код и ссылки на бота; пока он не nil — идёт опрос подключения.
+    @Published var tgLink: TelegramLink?
+    @Published var tgLinkBusy = false
+    @Published var tgNotice: String?
+    @Published var tgError: String?
+    /// До какого момента ждём подтверждения от бота (10 минут от выдачи кода).
+    private var tgDeadline: Date?
+    /// chat_id на сервере до выдачи кода: подключённым считаем только ДРУГОЙ непустой чат.
+    private var tgChatBefore = ""
     /// Основные поля в том виде, в каком их отдал сервер (см. saveMain).
     private var loadedMain: [String: String] = [:]
 
@@ -56,6 +72,7 @@ final class ShopSettingsViewModel: ObservableObject {
 
     func load() async {
         state = .loading
+        let statusGenBefore = Session.shared.statusGeneration
         do {
             let res = try await API.shared.settings()
             if let shop = res.shop {
@@ -78,7 +95,10 @@ final class ShopSettingsViewModel: ObservableObject {
                 // tgEvents уходит при сохранении целиком.
                 eventOptions = n.eventsAvailable?.map { ($0.key, $0.label) } ?? Self.tgEventOptions
             }
+            // АZ: ключ pause в ответе — сервер умеет паузу на время (нет ключа — старый сервер).
+            Session.shared.applyPause(res.pause, ifGen: statusGenBefore)
             state = .loaded
+            await loadTelegram()
         } catch is CancellationError {
         } catch {
             state = .failed(error.localizedDescription)
@@ -174,6 +194,77 @@ final class ShopSettingsViewModel: ObservableObject {
         }
     }
 
+    /// АZ: GET /settings/telegram. Любая ошибка или ответ без ключа enabled — нового блока нет.
+    func loadTelegram() async {
+        do {
+            let t = try await API.shared.telegramState()
+            if Task.isCancelled { return }
+            tg = t.known ? t : nil
+        } catch is CancellationError {
+        } catch {
+            tg = nil
+        }
+    }
+
+    /// АZ: «Подключить Telegram» — POST /settings/telegram/link, дальше экран опрашивает подключение.
+    func startTelegramLink() async {
+        guard !tgLinkBusy else { return }   // двойной тап — один запрос
+        tgLinkBusy = true
+        defer { tgLinkBusy = false }
+        tgError = nil
+        tgNotice = nil
+        do {
+            let link = try await API.shared.telegramLink()
+            guard let url = link.url, !url.isEmpty else {
+                tgError = APIError.decoding.localizedDescription
+                return
+            }
+            tgChatBefore = (tg?.chatId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // Код живёт 10 минут: ждём не дольше, чем сказал сервер, и не дольше десяти.
+            let ttl = min(max(link.ttl ?? 600, 60), 600)
+            tgDeadline = Date().addingTimeInterval(TimeInterval(ttl))
+            tgLink = link
+        } catch is CancellationError {
+        } catch {
+            tgError = error.localizedDescription   // 403 / 429 / 503 — текст сервера
+        }
+    }
+
+    /// Один шаг опроса (раз в 3 с, пока экран на виду). false — опрос закончен.
+    func pollTelegram() async -> Bool {
+        guard tgLink != nil, let deadline = tgDeadline else { return false }
+        if Date() >= deadline {
+            tgLink = nil
+            tgDeadline = nil
+            tgNotice = nil
+            tgError = "Время кода вышло — нажмите кнопку ещё раз."
+            return false
+        }
+        do {
+            let t = try await API.shared.telegramState()
+            guard tgLink != nil else { return false }   // закрыли, пока ждали ответ
+            let chat = (t.chatId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.known && !chat.isEmpty && chat != tgChatBefore {
+                tg = t
+                // КРИТИЧНО: новый чат — и в поле формы, и в «загруженное» значение. Иначе следующее
+                // «Сохранить уведомления» (telegramChatId для владельца, loadedChatId для остальных)
+                // отправило бы на сервер СТАРЫЙ chat_id и перетёрло подключённый чат.
+                telegramChatId = chat
+                loadedChatId = chat
+                tgLink = nil
+                tgDeadline = nil
+                tgError = nil
+                tgNotice = "Telegram подключён"
+                return false
+            }
+        } catch is CancellationError {
+            return false
+        } catch {
+            // Сбой сети на одном шаге — не конец: следующий опрос через 3 с.
+        }
+        return true
+    }
+
     func saveNotifications() async {
         guard canSaveFields else { return }
         await run("Настройки уведомлений сохранены") {
@@ -204,13 +295,10 @@ struct ShopSettingsView: View {
     @EnvironmentObject var session: Session
     @StateObject private var vm = ShopSettingsViewModel()
     @State private var showPhotoPicker = false
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     /// Что выбираем в галерее: логотип или баннер.
     @State private var pickBanner = false
-    @State private var statusError: String?
-    /// Переключение статуса в пути: быстрое вкл/выкл слало два запроса, ответы
-    /// приходили в любом порядке, и магазин оставался не в том статусе, что на
-    /// экране (в «Ещё» это уже закрыто так же).
-    @State private var statusBusy = false
 
     var body: some View {
         Form {
@@ -249,6 +337,16 @@ struct ShopSettingsView: View {
         // Только первая загрузка (или повтор после ошибки): .task срабатывает
         // при каждом возврате на экран (из «Часов работы», с другой вкладки) и
         // затирал несохранённые правки данными сервера.
+        // АZ: пока выдан код Telegram, экран на виду и приложение активно — раз в 3 секунды
+        // спрашиваем сервер, подключился ли чат (не дольше 10 минут от выдачи кода).
+        .task(id: pollActive) {
+            guard pollActive else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if Task.isCancelled { break }
+                if await vm.pollTelegram() == false { break }
+            }
+        }
         .task {
             // Пропускаем, только если загрузка ЗАВЕРШИЛАСЬ: ушли с экрана посреди
             // первой загрузки — она отменилась, состояние осталось .loading, и
@@ -256,6 +354,8 @@ struct ShopSettingsView: View {
             if vm.state != .loaded { await vm.load() }
         }
     }
+
+    private var pollActive: Bool { vm.tgLink != nil && scenePhase == .active }
 
     // ── Статус (большой тумблер) ─────────────────────────────────────────────
     private var statusSection: some View {
@@ -273,34 +373,8 @@ struct ShopSettingsView: View {
                         .font(.caption).foregroundColor(Brand.muted)
                 }
             } else {
-            Toggle(isOn: Binding(
-                get: { session.shopStatus == "active" },
-                set: { newValue in
-                    guard !statusBusy else { return }
-                    statusBusy = true
-                    Task {
-                        defer { statusBusy = false }
-                        do {
-                            try await session.setShopStatus(newValue ? "active" : "paused")
-                            statusError = nil
-                        } catch {
-                            statusError = error.localizedDescription
-                        }
-                    }
-                }
-            )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.shopStatus == "active" ? "Магазин открыт" : "Магазин на паузе")
-                        .font(.headline)
-                    Text("На паузе клиенты не могут оформлять заказы")
-                        .font(.caption).foregroundColor(Brand.muted)
-                }
-            }
-            .tint(Brand.green)
-            .disabled(statusBusy)
-            }
-            if let err = statusError {
-                Text(err).font(.footnote).foregroundColor(Brand.red)
+            // АZ: тумблер и окно «Пауза приёма заказов» — общий компонент (ShopPauseControl.swift).
+            ShopStatusControl(titleFont: .headline)
             }
         }
         .listRowBackground(Brand.card)
@@ -387,6 +461,8 @@ struct ShopSettingsView: View {
     // ── Telegram-уведомления ─────────────────────────────────────────────────
     private var notificationsSection: some View {
         Section {
+            // АZ: «Подключить Telegram» одной кнопкой — только если сервер ответил на GET /settings/telegram.
+            if let t = vm.tg { telegramBlock(t) }
             TextField("Telegram chat_id", text: $vm.telegramChatId)
                 .keyboardType(.numbersAndPunctuation)
                 .textInputAutocapitalization(.never)
@@ -410,6 +486,70 @@ struct ShopSettingsView: View {
                  + (Session.shared.isOwner ? "" : " Чат Telegram для уведомлений меняет только владелец организации."))
         }
         .listRowBackground(Brand.card)
+    }
+
+    // ── АZ: Telegram одной кнопкой ───────────────────────────────────────────
+    private func telegramBlock(_ t: TelegramState) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(Az.telegramStatus(t), systemImage: t.connected ? "checkmark.circle.fill" : "paperplane")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(t.connected ? Brand.green : Brand.text)
+            if !t.enabled {
+                Text("Бот площадки сейчас не настроен — укажите chat_id вручную ниже.")
+                    .font(.caption).foregroundColor(Brand.muted)
+            } else if !t.canLink {
+                Text("Подключить чат может владелец организации.")
+                    .font(.caption).foregroundColor(Brand.muted)
+            } else {
+                Button {
+                    Task { await vm.startTelegramLink() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if vm.tgLinkBusy { ProgressView().controlSize(.small) }
+                        Text(t.connected ? "Подключить другой чат" : "Подключить Telegram")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Brand.accent)
+                .disabled(vm.tgLinkBusy)
+            }
+            if let link = vm.tgLink { telegramLinkPanel(link, bot: link.bot ?? t.bot) }
+            if let n = vm.tgNotice {
+                Text(n).font(.footnote.weight(.semibold)).foregroundColor(Brand.green)
+            }
+            if let e = vm.tgError {
+                Text(e).font(.footnote).foregroundColor(Brand.red)
+            }
+        }
+    }
+
+    private func telegramLinkPanel(_ link: TelegramLink, bot: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Откройте бота и нажмите «Запустить» — уведомления пойдут в этот чат. Для группы смены — «Добавить в группу» и выберите группу.")
+                .font(.caption).foregroundColor(Brand.text)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Открыть @" + (bot ?? "")) { open(link.url) }
+                if let g = link.groupUrl, !g.isEmpty {
+                    Button("Добавить в группу") { open(g) }
+                }
+            }
+            .buttonStyle(.bordered)
+            .tint(Brand.accent)
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Ждём подтверждения от бота… Код действует 10 минут.")
+                    .font(.caption).foregroundColor(Brand.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Ссылка на бота — во внешнем приложении (Telegram) или браузере.
+    private func open(_ urlString: String?) {
+        guard let s = urlString, let url = URL(string: s) else { return }
+        openURL(url)
     }
 
     private var feedbackSection: some View {

@@ -84,14 +84,18 @@ extension API {
     }
 
     /// «Проблема с доставкой»: без фото — JSON, с фото — multipart (поле photo).
-    func poolProblem(id: Int, reason: String, comment: String, amount: String, photoJPEG: Data?) async throws -> PoolCall {
+    /// ВВ (сайт А750 №3): amount == nil — ключ не уходит («Не сдал деньги»: сумма игнорируется сервером).
+    /// Отказ — APIDetailedError (текст тот же): 422 errors.amount показывается у поля суммы.
+    func poolProblem(id: Int, reason: String, comment: String, amount: String?, photoJPEG: Data?) async throws -> PoolCall {
         let path = Self.poolBase + "/calls/\(id)/problem"
         if let jpeg = photoJPEG {
-            return try await uploadForm(path, fields: ["reason": reason, "comment": comment, "amount": amount],
+            var fields = ["reason": reason, "comment": comment]
+            if let amount { fields["amount"] = amount }
+            return try await uploadForm(path, fields: fields,
                                         fileField: "photo", filename: "problem.jpg", mime: "image/jpeg",
-                                        fileData: jpeg, idempotencyKey: nil, as: PoolCall.self)
+                                        fileData: jpeg, idempotencyKey: nil, detailed: true, as: PoolCall.self)
         }
-        return try await post(path, body: ["reason": reason, "comment": comment, "amount": amount], as: PoolCall.self)
+        return try await postDetailed(path, body: ["reason": reason, "comment": comment, "amount": amount], as: PoolCall.self)
     }
 
     /// Оплата клиента по QR заведения пришла (true) / не пришла (false).

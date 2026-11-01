@@ -37,16 +37,19 @@ final class ClientsViewModel: ObservableObject {
     private var loadGen = 0
     @Published var search = ""
     @Published var segment: String? {
-        didSet { if segment != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } }
+        didSet { if segment != oldValue && !applyingServerState { items = []; state = .loading; loadGen += 1; Task { await load() } } }
     }
 
     /// АY: сводка сегментов (nil — старый сервер); есть — сервер знает и sort/dir.
     @Published var segments: ClientSegmentsStats?
     @Published var sort: ClientSort = .spent {
-        didSet { if sort != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } }
+        didSet { if sort != oldValue && !applyingServerState { items = []; state = .loading; loadGen += 1; Task { await load() } } }
     }
 
     private var searchTask: Task<Void, Never>?
+    /// ВА: выбор приведён к тому, что сервер вернул в meta, — список этого ответа уже
+    /// соответствует ему, перечитывать не нужно (иначе вышел бы пустой результат/цикл).
+    private var applyingServerState = false
 
     func loadSegments() async {
         let s = await API.shared.clientSegments()
@@ -68,9 +71,18 @@ final class ClientsViewModel: ObservableObject {
         if items.isEmpty { state = .loading }
         do {
             let sq = segments != nil ? sort.query : nil
-            let fresh = try await API.shared.clients(search: search, segment: segment,
-                                                     sort: sq?.sort, dir: sq?.dir)
+            let (fresh, meta) = try await API.shared.clientsPage(search: search, segment: segment,
+                                                                 sort: sq?.sort, dir: sq?.dir)
             guard myGen == loadGen else { return }
+            // ВА (сайт А618): meta ответа — что сервер применил на самом деле. Не совпало с
+            // отправленным — выбор в UI становится таким, как вернул сервер; строки этого
+            // ответа остаются (они уже соответствуют ему). Нет ключей meta — как раньше.
+            if let fix = Ba.clientsFix(meta: meta, sentSegment: segment, sentSort: sq?.sort, sentDir: sq?.dir) {
+                applyingServerState = true
+                if fix.changeSegment { segment = fix.segment }
+                if fix.changeSort { sort = ClientSort.from(sort: fix.sort, dir: fix.dir) }
+                applyingServerState = false
+            }
             items = fresh
             state = .loaded
         } catch is CancellationError {
@@ -104,6 +116,18 @@ enum ClientSort: String, CaseIterable, Identifiable {
         case .avg:        return "По среднему чеку"
         case .name:       return "По имени"
         case .first:      return "Сначала новые клиенты"
+        }
+    }
+    /// ВА: сортировка по ответу сервера (meta.sort + meta.dir). Неизвестное сочетание — «по сумме»
+    /// (его сервер отдаёт по умолчанию). dir нет — направление по умолчанию для сортировки.
+    static func from(sort: String?, dir: String?) -> ClientSort {
+        switch sort {
+        case "orders": return .orders
+        case "last": return dir == "asc" ? .lastOld : .lastRecent
+        case "avg": return .avg
+        case "name": return .name
+        case "first": return .first
+        default: return .spent
         }
     }
     /// .spent — без параметров, как раньше (сервер сам сортирует по сумме).
