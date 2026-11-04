@@ -54,6 +54,7 @@ final class StockViewModel: ObservableObject {
 
 struct StockView: View {
     @StateObject private var vm = StockViewModel()
+    @State private var showScanner = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,6 +78,18 @@ struct StockView: View {
         .searchable(text: $vm.query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Название, артикул или штрихкод")
         .onChange(of: vm.query) { _ in vm.scheduleSearch() }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showScanner = true } label: {
+                    Image(systemName: "barcode.viewfinder")
+                }
+                .accessibilityLabel("Сканировать штрихкод")
+            }
+        }
+        // Скан — код в строку поиска, дальше обычный фильтр списка.
+        .fullScreenCover(isPresented: $showScanner) {
+            BarcodeScannerScreen { result in vm.query = result.value }
+        }
         .refreshable { await vm.load() }
         .listState(vm.state, isEmpty: vm.items.isEmpty,
                    emptyIcon: "shippingbox", emptyTitle: emptyTitle,

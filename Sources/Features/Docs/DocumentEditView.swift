@@ -912,7 +912,21 @@ struct StockSearchSheet: View {
     @State private var searching = false
     @State private var searchError: String?
     @State private var searchTask: Task<Void, Never>?
+    @State private var showScanner = false
+    /// Код последнего скана: пока он стоит в поле — единственное точное совпадение выбираем само.
+    /// Ручной ввод сбрасывает (автовыбор только на результат именно скана).
+    @State private var scannedCode: String?
     @Environment(\.dismiss) private var dismiss
+
+    private func applyScanned(_ code: String) {
+        scannedCode = code
+        if query.trimmingCharacters(in: .whitespaces) == code {
+            // Тот же код уже в поле — onChange не сработает, ищем сразу.
+            scheduleSearch()
+        } else {
+            query = code
+        }
+    }
 
     private func scheduleSearch() {
         searchTask?.cancel()
@@ -951,7 +965,10 @@ struct StockSearchSheet: View {
             .onSubmit(of: .search) { Task { await search() } }
             // С задержкой: раньше каждая буква слала поиск по складу, и на
             // медленной сети ответы приходили пачкой с опозданием.
-            .onChange(of: query) { _ in scheduleSearch() }
+            .onChange(of: query) { _ in
+                if let c = scannedCode, query.trimmingCharacters(in: .whitespaces) != c { scannedCode = nil }
+                scheduleSearch()
+            }
             .overlay {
                 // «Ничего не найдено» — только когда поиск действительно шёл
                 // (от 2 символов), а не после первой буквы.
@@ -961,7 +978,10 @@ struct StockSearchSheet: View {
                     if let err = searchError {
                         ErrorBanner(message: err) { Task { await search() } }
                     } else {
-                        EmptyState(icon: "magnifyingglass", title: "Ничего не найдено", subtitle: nil)
+                        // После скана — свой текст (паритет с Android).
+                        EmptyState(icon: "magnifyingglass",
+                                   title: scannedCode != nil ? BarcodeLogic.notFoundNote : "Ничего не найдено",
+                                   subtitle: nil)
                     }
                 } else if hits.isEmpty && query.trimmingCharacters(in: .whitespaces).count < 2 {
                     // Пустой белый лист до ввода выглядел сломанным — особенно у
@@ -972,7 +992,18 @@ struct StockSearchSheet: View {
             }
             .navigationTitle(productsOnly ? "Добавить товар" : "Добавить позицию")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showScanner = true } label: {
+                        Image(systemName: "barcode.viewfinder")
+                    }
+                    .accessibilityLabel("Сканировать штрихкод")
+                }
+            }
+            .fullScreenCover(isPresented: $showScanner) {
+                BarcodeScannerScreen { result in applyScanned(result.value) }
+            }
         }
     }
 
@@ -995,5 +1026,13 @@ struct StockSearchSheet: View {
         hits = productsOnly ? found.filter { !$0.isIngredient } : found
         searchError = failure
         searching = false
+        // Ответ на скан: ровно одна позиция с таким штрихкодом — выбираем, как будто нажали на неё.
+        if failure == nil, let code = scannedCode, code == q,
+           let i = BarcodeLogic.exactMatch(code: code, barcodes: hits.map { $0.barcode }) {
+            scannedCode = nil
+            let hit = hits[i]
+            onPick(hit)
+            dismiss()
+        }
     }
 }

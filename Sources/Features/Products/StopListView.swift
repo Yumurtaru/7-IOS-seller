@@ -209,6 +209,36 @@ struct AddToStopSheet: View {
     @State private var selected: ProductSummary?
     @State private var reason = ""
     @State private var duration = 0   // минуты; 0 = бессрочно
+    /// Код последнего скана: пока он стоит в поле — единственное точное совпадение выбираем само.
+    /// Ручной ввод сбрасывает (автовыбор только на результат именно скана).
+    @State private var scannedCode: String?
+    /// Поиск по отсканированному коду закончился пустой выдачей.
+    @State private var scanMiss = false
+
+    private func applyScanned(_ code: String) {
+        scannedCode = code
+        scanMiss = false
+        if query.trimmingCharacters(in: .whitespaces) == code {
+            // Тот же код уже в поле — onChange не сработает, ищем сразу.
+            Task { await vm.searchProducts(code) }
+        } else {
+            query = code
+        }
+    }
+
+    /// Поиск закончился: если это ответ на скан (в поле всё ещё его код) — выбираем единственное точное совпадение.
+    /// Устаревший ответ сюда не доходит: VM не снимает «searching» для прежнего запроса.
+    private func scanSearchFinished() {
+        guard let code = scannedCode,
+              query.trimmingCharacters(in: .whitespaces) == code,
+              vm.searchError == nil else { return }
+        if let i = BarcodeLogic.exactMatch(code: code, barcodes: vm.products.map { $0.barcode }) {
+            scannedCode = nil
+            selected = vm.products[i]
+        } else {
+            scanMiss = vm.products.isEmpty
+        }
+    }
 
     // «До завтра» раньше было ровно 1440 минут: блюдо, снятое в 22:00, не
     // продавалось и весь следующий день до 22:00. Теперь «До конца дня» —
@@ -236,10 +266,21 @@ struct AddToStopSheet: View {
         NavigationStack {
             Form {
                 Section("Товар") {
-                    TextField("Поиск товара", text: $query)
-                        .onChange(of: query) { q in
-                            vm.scheduleSearch(q)   // с задержкой, не на каждую букву
-                        }
+                    HStack {
+                        TextField("Поиск товара", text: $query)
+                            .onChange(of: query) { q in
+                                if let c = scannedCode, q.trimmingCharacters(in: .whitespaces) != c {
+                                    scannedCode = nil
+                                    scanMiss = false
+                                }
+                                vm.scheduleSearch(q)   // с задержкой, не на каждую букву
+                            }
+                        BarcodeScanButton { result in applyScanned(result.value) }
+                    }
+                    if scanMiss {
+                        Text(BarcodeLogic.notFoundNote)
+                            .font(.footnote).foregroundColor(Brand.muted)
+                    }
                     if vm.searching { ProgressView() }
                     if let err = vm.searchError, !vm.searching {
                         Button { Task { await vm.searchProducts(query) } } label: {
@@ -303,6 +344,9 @@ struct AddToStopSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Отмена") { dismiss() }
                 }
+            }
+            .onChange(of: vm.searching) { busy in
+                if !busy { scanSearchFinished() }
             }
             .task { await vm.searchProducts("") }
         }

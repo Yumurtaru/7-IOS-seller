@@ -91,6 +91,7 @@ final class ArticlesViewModel: ObservableObject {
 struct ArticlesView: View {
     @StateObject private var vm = ArticlesViewModel()
     @State private var query = ""
+    @State private var showScanner = false
 
     private var filtered: [ArticleRow] {
         guard !query.isEmpty else { return vm.rows }
@@ -150,6 +151,16 @@ struct ArticlesView: View {
                 Button("Сохранить") { Task { await vm.save() } }
                     .disabled(!vm.hasChanges || vm.saving)
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showScanner = true } label: {
+                    Image(systemName: "barcode.viewfinder")
+                }
+                .accessibilityLabel("Сканировать штрихкод")
+            }
+        }
+        // Скан — код в фильтр (фильтр локальный).
+        .fullScreenCover(isPresented: $showScanner) {
+            BarcodeScannerScreen { result in query = result.value }
         }
         .refreshable { await vm.load() }
         // Не только .idle: ушли с экрана посреди первой загрузки — она отменилась,

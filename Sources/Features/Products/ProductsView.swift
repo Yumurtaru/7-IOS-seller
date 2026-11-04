@@ -59,6 +59,8 @@ final class ProductsViewModel: ObservableObject {
     // показывал «Товаров пока нет» и кнопку «Добавить первый товар» магазину с товарами.
     @Published var state: LoadState = .loading
     @Published var search = ""
+    /// Поиск, по которому список реально загружен (нужен кнопке «Создать товар с этим штрихкодом»).
+    @Published private(set) var settledSearch = ""
     // Смена фильтра сразу убирает строки прежнего и гасит его запросы (как в
     // заказах): раньше товары прежней категории стояли под новым чипом, а при
     // сбое загрузки — так и оставались под ним.
@@ -152,6 +154,7 @@ final class ProductsViewModel: ObservableObject {
         moreError = nil   // ошибка догрузки прежнего списка к новому не относится
         if items.isEmpty { state = .loading }
         let key = filterKey
+        let searchAtStart = search
         do {
             let res = try await API.shared.products(category: categoryFilter, status: statusFilter,
                                                     q: search, page: 1, extra: extraQuery)
@@ -183,6 +186,7 @@ final class ProductsViewModel: ObservableObject {
             firstPageCount = res.items.count
             pagesKey = key
             state = .loaded
+            settledSearch = searchAtStart
         } catch is CancellationError {
         } catch {
             guard myGen == gen else { return }
@@ -328,6 +332,11 @@ struct ProductsView: View {
     @StateObject private var vm = ProductsViewModel()
     @State private var quickPriceTarget: ProductSummary?
     @State private var showCreate = false
+    /// Сканер у поля поиска и последний отсканированный код (для кнопки «Создать товар с этим штрихкодом»).
+    @State private var showSearchScanner = false
+    @State private var scannedCode: String?
+    /// Штрихкод для нового товара, открытого с пустой выдачи поиска.
+    @State private var createBarcode: String?
     /// Открытая карточка товара. Строка — не NavigationLink: в ней свои
     /// тумблер наличия и кнопка ₽ (паритет с Android), а NavigationLink
     /// забирал касания всей строки.
@@ -372,6 +381,12 @@ struct ProductsView: View {
             .onChange(of: vm.search) { _ in vm.onSearchChanged() }
             .toolbar {
                 ToolbarItem(placement: .principal) { ShopSwitcherMenu() }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showSearchScanner = true } label: {
+                        Image(systemName: "barcode.viewfinder")
+                    }
+                    .accessibilityLabel("Сканировать штрихкод")
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         // Создание, цена и удаление — отдельные права внутри
@@ -431,13 +446,16 @@ struct ProductsView: View {
                                 isPresented: $confirmBulkDelete, titleVisibility: .visible) {
                 Button("Удалить", role: .destructive) { Task { await vm.bulk(action: "delete", value: nil) } }
             }
-            .sheet(isPresented: $showCreate, onDismiss: { Task { await vm.reload() } }) {
+            .sheet(isPresented: $showCreate, onDismiss: {
+                createBarcode = nil
+                Task { await vm.reload() }
+            }) {
                 NavigationStack {
                     // «Закрыть» — внутри карточки: гаснет, пока создание в пути, и
                     // спрашивает, если форма заполнена. После создания карточка
                     // остаётся открытой — можно сразу добавить фото.
                     ProductEditView(productId: nil, categories: vm.categories,
-                                    onClose: { showCreate = false })
+                                    onClose: { showCreate = false }, initialBarcode: createBarcode)
                 }
                 // Случайный свайп вниз закрывал лист и стирал всю заполненную
                 // карточку. Закрыть — только кнопкой.
@@ -448,6 +466,12 @@ struct ProductsView: View {
             .sheet(item: $quickPriceTarget) { product in
                 QuickPriceSheet(product: product) { price in
                     await vm.quickPrice(product, price: price)
+                }
+            }
+            .fullScreenCover(isPresented: $showSearchScanner) {
+                BarcodeScannerScreen { result in
+                    scannedCode = result.value
+                    vm.search = result.value
                 }
             }
             .task {
@@ -543,13 +567,26 @@ struct ProductsView: View {
     }
 
     private var addFirstTitle: String? {
+        if canCreateFromScan { return "Создать товар с этим штрихкодом" }
         guard canAddFirst else { return nil }
         return session.shopType == "cafe" ? "Добавить первое блюдо" : "Добавить первый товар"
     }
 
     private var addFirstAction: (() -> Void)? {
+        if canCreateFromScan, let code = scannedCode {
+            return { createBarcode = code; showCreate = true }
+        }
         guard canAddFirst else { return nil }
         return { showCreate = true }
+    }
+
+    /// Поиск по отсканированному коду закончился пустой выдачей, фильтров нет и есть право создавать
+    /// (то же, что у кнопки «Новый товар»).
+    private var canCreateFromScan: Bool {
+        guard let code = scannedCode, canCreate, vm.items.isEmpty, vm.state == .loaded else { return false }
+        guard vm.statusFilter == nil, vm.categoryFilter == nil, vm.quickFilter == nil else { return false }
+        return vm.search.trimmingCharacters(in: .whitespacesAndNewlines) == code
+            && vm.settledSearch.trimmingCharacters(in: .whitespacesAndNewlines) == code
     }
 
     /// Каталог пуст без фильтров и есть право заводить позиции.

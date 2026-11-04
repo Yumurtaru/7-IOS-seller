@@ -496,6 +496,27 @@ struct AddSupplierPriceSheet: View {
     /// Поиск не удался (нет сети): раньше список просто оставался пустым,
     /// и казалось, что позиции нет в базе.
     @State private var searchError: String?
+    /// Код последнего скана: пока он стоит в поле — единственное точное совпадение выбираем само.
+    /// Ручной ввод сбрасывает (автовыбор только на результат именно скана).
+    @State private var scannedCode: String?
+    /// Поиск по отсканированному коду закончился пустой выдачей.
+    @State private var scanMiss = false
+
+    private func pick(_ r: StockSearchItem) {
+        selected = r
+        if priceText.isEmpty, let p = r.anyPrice, p > 0 { priceText = "\(p)" }
+    }
+
+    private func applyScanned(_ code: String) {
+        scannedCode = code
+        scanMiss = false
+        if query.trimmingCharacters(in: .whitespaces) == code {
+            // Тот же код уже в поле — onChange не сработает, ищем сразу.
+            scheduleSearch()
+        } else {
+            query = code
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -513,8 +534,21 @@ struct AddSupplierPriceSheet: View {
                                 .buttonStyle(.borderless)
                         }
                     } else {
-                        TextField("Поиск товара или ингредиента", text: $query)
-                            .onChange(of: query) { _ in scheduleSearch() }
+                        HStack {
+                            TextField("Поиск товара или ингредиента", text: $query)
+                                .onChange(of: query) { _ in
+                                    if let c = scannedCode, query.trimmingCharacters(in: .whitespaces) != c {
+                                        scannedCode = nil
+                                        scanMiss = false
+                                    }
+                                    scheduleSearch()
+                                }
+                            BarcodeScanButton { result in applyScanned(result.value) }
+                        }
+                        if scanMiss {
+                            Text(BarcodeLogic.notFoundNote)
+                                .font(.footnote).foregroundColor(Brand.muted)
+                        }
                         if let err = searchError {
                             Button { scheduleSearch() } label: {
                                 Text("Не удалось найти: \(err) · Повторить")
@@ -523,8 +557,7 @@ struct AddSupplierPriceSheet: View {
                         }
                         ForEach(results) { r in
                             Button {
-                                selected = r
-                                if priceText.isEmpty, let p = r.anyPrice, p > 0 { priceText = "\(p)" }
+                                pick(r)
                             } label: {
                                 HStack {
                                     Text(r.name ?? "—").foregroundColor(Brand.text)
@@ -590,7 +623,19 @@ struct AddSupplierPriceSheet: View {
             guard !Task.isCancelled else { return }
             // Замыкание MainActor.run — @Sendable: захват локальных var не компилируется в Xcode 15/16.
             let f = found, e = failure
-            await MainActor.run { results = f; searchError = e }
+            await MainActor.run {
+                results = f
+                searchError = e
+                // Ответ на скан: ровно одна позиция с таким штрихкодом — выбираем, как будто нажали на неё.
+                if e == nil, let code = scannedCode, code == q.trimmingCharacters(in: .whitespaces) {
+                    if let i = BarcodeLogic.exactMatch(code: code, barcodes: f.map { $0.barcode }) {
+                        scannedCode = nil
+                        pick(f[i])
+                    } else {
+                        scanMiss = f.isEmpty
+                    }
+                }
+            }
         }
     }
 

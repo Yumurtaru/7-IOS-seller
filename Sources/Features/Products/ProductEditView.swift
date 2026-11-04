@@ -29,6 +29,12 @@ final class ProductEditViewModel: ObservableObject {
     @Published var weight = ""
     @Published var article = ""
     @Published var barcode = ""
+    /// Скан штрихкода: подпись «взят из кода маркировки» и предупреждение о дубле (не блокирует сохранение).
+    @Published var barcodeNote: String?
+    @Published var barcodeWarning: String?
+    /// Значение, подставленное сканером: ручная правка поля (значение другое) убирает подписи.
+    private var scannedValue: String?
+    private var dupGen = 0
     @Published var tags: [String] = []
     @Published var allergens: [String] = []
     @Published var calories = ""
@@ -75,7 +81,7 @@ final class ProductEditViewModel: ObservableObject {
     /// (см. ProductDraftStore.currentKey). Смена магазина его не меняет.
     private let draftKey: String?
 
-    init(productId: Int?) {
+    init(productId: Int?, initialBarcode: String? = nil) {
         self.productId = productId
         self.isNew = productId == nil
         self.draftKey = productId == nil ? ProductDraftStore.currentKey() : nil
@@ -92,6 +98,10 @@ final class ProductEditViewModel: ObservableObject {
                 apply(d)
                 restoredDraft = true
                 draftMaybeSent = d.maybeSent
+            }
+            // Со списка товаров: ничего не нашли по отсканированному коду и создаём товар с ним.
+            if let code = initialBarcode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+                barcode = code
             }
         }
     }
@@ -195,6 +205,42 @@ final class ProductEditViewModel: ObservableObject {
             if gen == loadGen { state = .idle }
         } catch {
             if gen == loadGen { state = .failed(error.localizedDescription) }
+        }
+    }
+
+    // ── Сканер штрихкода ─────────────────────────────────────────────────────
+    /// Скан: значение заменяет поле, затем тихая проверка дубля по списку товаров.
+    func applyScanned(_ result: BarcodeScanResult) {
+        scannedValue = result.value
+        barcodeNote = result.fromMarking ? BarcodeLogic.markingNote : nil
+        barcodeWarning = nil
+        barcode = result.value
+        dupGen += 1
+        let gen = dupGen
+        let code = result.value
+        Task { await checkDuplicate(code: code, gen: gen) }
+    }
+
+    /// Поле правили руками — подписи и идущая проверка отменяются.
+    func barcodeEdited(_ newValue: String) {
+        if newValue == scannedValue { return }
+        scannedValue = nil
+        barcodeNote = nil
+        barcodeWarning = nil
+        dupGen += 1
+    }
+
+    /// GET /api/seller/products?q=<код>, первая страница. Ошибка сети — молча.
+    private func checkDuplicate(code: String, gen: Int) async {
+        guard let page = try? await API.shared.products(category: nil, status: nil, q: code, page: 1) else { return }
+        guard gen == dupGen, barcode == code else { return }
+        let me = productId
+        let other = page.items.first { item in
+            (item.barcode ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == code && (me == nil || item.id != me)
+        }
+        if let other = other {
+            let title = (other.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            barcodeWarning = "Этот штрихкод уже есть у товара «\(title.isEmpty ? "—" : title)»"
         }
     }
 
@@ -455,8 +501,8 @@ struct ProductEditView: View {
     @State private var confirmClose = false
 
     init(productId: Int?, categories: [SellerCategory], onDeleted: (() -> Void)? = nil,
-         onClose: (() -> Void)? = nil) {
-        _vm = StateObject(wrappedValue: ProductEditViewModel(productId: productId))
+         onClose: (() -> Void)? = nil, initialBarcode: String? = nil) {
+        _vm = StateObject(wrappedValue: ProductEditViewModel(productId: productId, initialBarcode: initialBarcode))
         self.categories = categories
         self.onDeleted = onDeleted
         self.onClose = onClose
@@ -621,7 +667,17 @@ struct ProductEditView: View {
 
                 Section("Учёт") {
                     TextField("Артикул", text: $vm.article)
-                    TextField("Штрихкод", text: $vm.barcode).keyboardType(.numberPad)
+                    HStack(spacing: 6) {
+                        TextField("Штрихкод", text: $vm.barcode).keyboardType(.numberPad)
+                            .onChange(of: vm.barcode) { newValue in vm.barcodeEdited(newValue) }
+                        BarcodeScanButton { result in vm.applyScanned(result) }
+                    }
+                    if let note = vm.barcodeNote {
+                        Text(note).font(.footnote).foregroundColor(Brand.muted)
+                    }
+                    if let warn = vm.barcodeWarning {
+                        Text(warn).font(.footnote).foregroundColor(Brand.amber)
+                    }
                     TextField("Единица (шт, кг, л…)", text: $vm.unit)
                     TextField("Вес/объём", text: $vm.weight).keyboardType(.decimalPad)
                 }

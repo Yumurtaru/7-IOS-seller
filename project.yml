@@ -38,7 +38,7 @@ targets:
         # 1.0.7 (24.10.2026): Apple закрыл 1.0.6 для новых сборок (шаг «Версия свободна», сборка 6);
         # помощник, вызов «на потом», защита от повторов при обрыве связи.
         CFBundleShortVersionString: "1.0.8"
-        NSCameraUsageDescription: "Камера нужна для фото товаров и мастеров"
+        NSCameraUsageDescription: "Камера нужна для фото товаров и мастеров и для сканирования штрихкодов"
         NSPhotoLibraryUsageDescription: "Галерея нужна для загрузки фото товаров и мастеров"
         UILaunchScreen:
           UIColorName: LaunchBG
