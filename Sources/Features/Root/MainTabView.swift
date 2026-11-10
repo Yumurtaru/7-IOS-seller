@@ -147,7 +147,11 @@ struct MainTabView: View {
         // приложение было свёрнуто, не появлялся в бейдже до перезапуска.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             Task { await session.refreshShops() }
+            // Помощник Yumurta: не выключили ли в админке (не чаще раза в минуту).
+            Task { await AssistantFeature.shared.refresh(shopId: session.activeShopId, force: false) }
         }
+        // Помощник Yumurta: включён ли — при запуске и после смены организации.
+        .task(id: session.activeShopId) { await AssistantFeature.shared.refresh(shopId: session.activeShopId, force: true) }
         // П-52: «Вышла новая версия» — только на сводке и не поверх входа (этот экран
         // есть только после входа). Окно — отдельным модификатором (AppUpdateViews.swift).
         // Во время смены магазина — тоже нет: дерево экранов пересоздаётся, окно мешало бы.

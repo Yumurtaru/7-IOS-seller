@@ -111,6 +111,23 @@ enum DateFmt {
         return (isThisYear(date) ? shortOut : shortYearOut).string(from: date)
     }
 
+    /// Время ПРЕДЗАКАЗА («Ко времени»): сайт (S2, 2026-11) пишет его по часам ГОРОДА заведения —
+    /// показываем как есть, без перевода из Москвы в пояс телефона (иначе в Екатеринбурге «к 14:00»
+    /// превращалось в «16:00»). Читаем и выводим в одном поясе — устройства. Формат — как у short.
+    static func wall(_ s: String?) -> String {
+        guard let s = s, !s.isEmpty else { return s ?? "" }
+        let t = s.count == 16 ? s + ":00" : s
+        guard let date = wallDateTime.date(from: t) else { return short(s) }
+        return (isThisYear(date) ? shortOut : shortYearOut).string(from: date)
+    }
+    private static let wallDateTime: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.autoupdatingCurrent
+        return f
+    }()
+
     /// "2 июля" для дат без времени; другой год — "2 июля 2027".
     static func day(_ s: String?) -> String {
         guard let date = parse(s) else { return s ?? "" }

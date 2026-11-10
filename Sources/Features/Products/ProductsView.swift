@@ -792,7 +792,7 @@ struct ProductRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            RemoteImage(path: product.photo, size: 52)
+            RemoteImage(path: product.photo, size: 52, fit: true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(product.name ?? "Товар")
                     .font(.subheadline.weight(.medium))
@@ -808,6 +808,10 @@ struct ProductRow: View {
                             .strikethrough()
                             .foregroundColor(Brand.muted)
                     }
+                }
+                // O1: «опт от 25 кг» — первая действующая ступень.
+                if let w = Wholesale.listLabel(tiers: product.priceTiers, retail: product.price, unit: product.unit) {
+                    Text(w).font(.caption2).foregroundColor(Brand.muted)
                 }
                 HStack(spacing: 6) {
                     if let cat = product.category, !cat.isEmpty {

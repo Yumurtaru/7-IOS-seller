@@ -18,6 +18,15 @@ struct MoreView: View {
     @ObservedObject private var salesFeature = SalesReportFeature.shared
     /// А99: есть ли на сервере «Переоценка» (старый сервер — 404, пункта нет).
     @ObservedObject private var revalFeature = RevalFeature.shared
+    /// В5: есть ли на сервере «План закупок» (старый сервер — 404/405, пункта нет).
+    @ObservedObject private var replFeature = ReplenishmentFeature.shared
+    @ObservedObject private var ocrFeature = InvoiceOcrFeature.shared
+    /// Есть ли на сервере «Фиды для площадок» (старый сервер — 404/405, пункта нет).
+    @ObservedObject private var feedFeature = FeedFeature.shared
+    /// Помощник Yumurta: пункт «Помощник» — только пока он включён в админке сайта.
+    @ObservedObject private var assistant = AssistantFeature.shared
+    // Переход в чат — вне условного блока (см. DashboardView): выключение помощника не закрывает открытый чат.
+    @State private var showAssistant = false
     @State private var pushReturns = false
     /// Раздел, открытый из push (router.openSection): "security" | "reservations".
     @State private var pushSection: String?
@@ -28,6 +37,7 @@ struct MoreView: View {
     var body: some View {
         NavigationStack {
             List {
+                assistantSection
                 shopSection
                 supportSection
                 lodgingSection
@@ -49,6 +59,7 @@ struct MoreView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .principal) { ShopSwitcherMenu() } }
             .navigationDestination(isPresented: $pushReturns) { ReturnsView() }
+            .navigationDestination(isPresented: $showAssistant) { AssistantView() }
             .navigationDestination(isPresented: Binding(
                 get: { pushSection != nil },
                 set: { if !$0 { pushSection = nil } }
@@ -76,6 +87,12 @@ struct MoreView: View {
             .task(id: session.activeShopId) { await salesFeature.refresh(shopId: session.activeShopId) }
             // А99: пункт «Переоценка» — после ответа сервера, для каждой организации.
             .task(id: session.activeShopId) { await revalFeature.refresh(shopId: session.activeShopId) }
+            // В5: пункт «План закупок» — после ответа сервера, для каждой организации.
+            .task(id: session.activeShopId) {
+                await replFeature.refresh(shopId: session.activeShopId)
+                await ocrFeature.refresh(shopId: session.activeShopId)
+                await feedFeature.refresh(shopId: session.activeShopId)
+            }
             .onAppear {
                 push.refreshAuthorizationStatus()
                 // А66: бейдж «Техподдержка» (сам не спрашивает чаще раза в минуту).
@@ -169,6 +186,29 @@ struct MoreView: View {
             pushReturns = false
             try? await Task.sleep(nanoseconds: 50_000_000)
             pushReturns = true
+        }
+    }
+
+    // ── Помощник Yumurta: верхний уровень «Ещё» ─────────────────────────────
+    @ViewBuilder
+    private var assistantSection: some View {
+        if assistant.available {
+            Section {
+                Button { showAssistant = true } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(AssistantGate.title)
+                            Text(AssistantGate.subtitle)
+                                .font(.caption)
+                                .foregroundColor(Brand.muted)
+                        }
+                    } icon: {
+                        Image(systemName: "sparkles")
+                    }
+                    .foregroundColor(Brand.text)   // как у строки-ссылки, а не цветом кнопки
+                }
+            }
+            .listRowBackground(Brand.card)
         }
     }
 
@@ -494,6 +534,18 @@ struct MoreView: View {
                     NavigationLink { WarehouseReportsView() } label: {
                         Label("Отчёты по складу", systemImage: "chart.bar.doc.horizontal")
                     }
+                    // Приход по фото накладной: пункта нет, пока сайт не обновлён или распознавание выключено.
+                    if ocrFeature.available {
+                        NavigationLink { InvoiceOcrHomeView() } label: {
+                            Label("Приход по фото накладной", systemImage: "doc.text.viewfinder")
+                        }
+                    }
+                    // План закупок: смотреть план — право «Склад»; создавать заказы — ещё «Поставщики» (проверяет экран).
+                    if replFeature.available {
+                        NavigationLink { ReplenishmentView() } label: {
+                            Label("План закупок", systemImage: "chart.line.uptrend.xyaxis")
+                        }
+                    }
                     NavigationLink { WarehouseSettingsView() } label: {
                         Label("Настройки склада", systemImage: "slider.horizontal.3")
                     }
@@ -568,6 +620,12 @@ struct MoreView: View {
                 if canExport {
                     NavigationLink { ExportsView() } label: {
                         Label("Выгрузки и обмен", systemImage: "square.and.arrow.up")
+                    }
+                }
+                // Фиды для площадок: право «Товары»; пункта нет, пока сайт не обновлён.
+                if feedFeature.available {
+                    NavigationLink { FeedsView() } label: {
+                        Label(FeedLogic.sectionTitle, systemImage: "link")
                     }
                 }
                 // Загрузка заполненного файла — право «Товары»: импорт заводит

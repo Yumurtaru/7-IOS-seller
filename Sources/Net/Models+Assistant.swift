@@ -32,9 +32,11 @@ struct AssistantStatus: Decodable {
     let loginRequired: Bool
     let leftToday: Int?
     let maxLength: Int
+    /// 152-ФЗ: не пусто — показать над полем ввода до первого сообщения. Старый сервер — "".
+    let notice: String
 
     enum CodingKeys: String, CodingKey {
-        case enabled, audience, name, greeting, disclaimer, suggestions
+        case enabled, audience, name, greeting, disclaimer, suggestions, notice
         case canHandoff = "can_handoff", loginRequired = "login_required"
         case leftToday = "left_today", maxLength = "max_length"
     }
@@ -51,6 +53,7 @@ struct AssistantStatus: Decodable {
         loginRequired = c.bool(.loginRequired)
         leftToday = c.int(.leftToday)
         maxLength = c.int(.maxLength) ?? 0
+        notice = (c.str(.notice) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

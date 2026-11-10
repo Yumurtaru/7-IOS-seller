@@ -166,6 +166,8 @@ struct MeShop: Decodable {
     let type: String?      // shop | cafe | service — по нему строятся вкладки
     let mode: String?
     let status: String?
+    /// П-68: IANA-пояс города заведения ("Asia/Yekaterinburg"); нет поля — Москва.
+    @LenientString var timezone: String?
 }
 
 struct SellerUser: Decodable {
@@ -788,9 +790,12 @@ struct ProductSummary: Decodable, Identifiable {
     /// ВВ (сайт А819): скрыт модератором площадки + причина. Ключей нет (старый сервер) — nil.
     @LenientBool var moderationHidden: Bool?
     var moderationReason: String?
+    /// O1: оптовые ступени. Ключа нет (старый сервер) — nil = опта нет.
+    @LenientPriceTiers var priceTiers: [PriceTier]?
 
     enum CodingKeys: String, CodingKey {
         case id, name, article, barcode, price, type, status, category, photo, stopped, unit
+        case priceTiers = "price_tiers"
         case moderationHidden = "moderation_hidden"
         case moderationReason = "moderation_reason"
         case priceOld = "price_old"
@@ -836,9 +841,12 @@ struct ProductDetail: Decodable {
     /// ВВ (сайт А819): скрыт модератором площадки + причина. Ключей нет (старый сервер) — nil.
     @LenientBool var moderationHidden: Bool?
     var moderationReason: String?
+    /// O1: оптовые ступени. Ключа нет (старый сервер) — nil; продавец тогда ключ не шлёт, пока не тронет блок.
+    @LenientPriceTiers var priceTiers: [PriceTier]?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, type, price, unit, weight, article, barcode
+        case priceTiers = "price_tiers"
         case calories, proteins, fats, carbs, status, photos, tags, allergens
         case moderationHidden = "moderation_hidden"
         case moderationReason = "moderation_reason"
@@ -889,9 +897,13 @@ struct AIDescription: Decodable {
     var description: String?
     @LenientInt var usedToday: Int?
     @LenientInt var limit: Int?
+    /// Необязательные (сайт А-ASSIST2): учтено ли фото, применённый стиль. Старый сервер — nil.
+    @LenientBool var photoUsed: Bool?
+    @LenientString var style: String?
     enum CodingKeys: String, CodingKey {
-        case description, limit
+        case description, limit, style
         case usedToday = "used_today"
+        case photoUsed = "photo_used"
     }
 }
 
@@ -1402,9 +1414,11 @@ struct ShopSettings: Decodable {
     @LenientDecimal var serviceFeePercent: Decimal?
     var serviceFeePayer: String?
     @LenientInt var returnWindowHours: Int?
+    /// П-68: IANA-пояс города заведения; нет поля — Москва.
+    @LenientString var timezone: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, description, address, lat, lng, phone, email, inn, type, logo, banner, mode, status
+        case name, description, address, lat, lng, phone, email, inn, type, logo, banner, mode, status, timezone
         case orgType = "org_type"
         case cityId = "city_id"
         case serviceFeePercent = "service_fee_percent"

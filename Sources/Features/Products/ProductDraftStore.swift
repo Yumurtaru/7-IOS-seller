@@ -32,6 +32,8 @@ struct ProductDraft: Codable, Equatable {
     var status = "active"
     var isAvailable = true
     var isMarked = false
+    /// O1: оптовые ступени нового товара. Поле необязательное — старые черновики читаются.
+    var tiers: [DraftTier]?
     /// Последняя попытка создания ушла на сервер, а ответа не было (обрыв,
     /// выгрузка приложения посреди запроса): товар мог уже создаться.
     var maybeSent = false
@@ -43,7 +45,14 @@ struct ProductDraft: Codable, Equatable {
                      calories, proteins, fats, carbs]
         return texts.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             || !tags.isEmpty || !allergens.isEmpty || categoryId != nil
+            || !(tiers ?? []).isEmpty
     }
+}
+
+/// Строка оптовой ступени в черновике (текст как ввёл продавец).
+struct DraftTier: Codable, Equatable {
+    var qty = ""
+    var price = ""
 }
 
 @MainActor

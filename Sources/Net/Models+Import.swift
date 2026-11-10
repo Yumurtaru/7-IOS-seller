@@ -28,22 +28,31 @@ struct ImportUpload: Decodable {
     let fields: [String: ImportField]?
     /// Автоподбор сервера: поле -> номер колонки.
     let suggested: [String: Int]?
+    /// Только у ручки заданий импорта (POST import/jobs, jobs/{id}/sheet); у старой upload полей нет — nil.
+    @LenientInt var jobId: Int?
+    let sheets: [ImpSheet]?
+    @LenientString var sheet: String?
 
     enum CodingKeys: String, CodingKey {
-        case target, headers, sample, total, fields, suggested
+        case target, headers, sample, total, fields, suggested, sheets, sheet
         case fileId = "file_id"
+        case jobId = "job_id"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         fileId = try? c.decodeIfPresent(String.self, forKey: .fileId)
         target = try? c.decodeIfPresent(String.self, forKey: .target)
-        headers = (try? c.decodeIfPresent([String].self, forKey: .headers)) ?? []
+        // Пустая ячейка заголовка бывает null: список [String] из-за неё целиком не разбирался.
+        headers = ((try? c.decodeIfPresent([String?].self, forKey: .headers)) ?? nil)?.map { $0 ?? "" } ?? []
         // Ячейки приходят строками, но пустые колонки бывают null — не роняем разбор.
         sample = (try? c.decodeIfPresent([[String]].self, forKey: .sample)) ?? []
         _total = try c.decode(LenientInt.self, forKey: .total)
         fields = (try? c.decodeIfPresent([String: ImportField].self, forKey: .fields)) ?? [:]
         suggested = (try? c.decodeIfPresent([String: Int].self, forKey: .suggested)) ?? [:]
+        _jobId = try c.decode(LenientInt.self, forKey: .jobId)
+        sheets = c.tolList(ImpSheet.self, .sheets)
+        _sheet = try c.decode(LenientString.self, forKey: .sheet)
     }
 
     /// Порядок полей повторяет importFieldsFor() на сервере: JSON-объект в Swift

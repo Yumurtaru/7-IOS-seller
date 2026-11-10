@@ -13,7 +13,7 @@ final class SlotsViewModel: ObservableObject {
     @Published var selectedServiceId: Int? {
         didSet { if selectedServiceId != oldValue { slots = []; Task { await loadSlots() } } }
     }
-    @Published var weekStart = Calendar.current.startOfDay(for: Date()) {
+    @Published var weekStart = ShopTime.todayDate() {   // П-68: «сегодня» по часам заведения
         // Другая неделя — слоты прежней не показываем (были под новым заголовком).
         didSet { if weekStart != oldValue { slots = [] }; Task { await loadSlots() } }
     }
@@ -272,8 +272,8 @@ struct GenerateSlotsSheet: View {
     @ObservedObject var vm: SlotsViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var from = Date()
-    @State private var to = Calendar.current.date(byAdding: .day, value: 13, to: Date()) ?? Date()
+    @State private var from = ShopTime.todayDate()
+    @State private var to = Calendar.current.date(byAdding: .day, value: 13, to: ShopTime.todayDate()) ?? ShopTime.todayDate()
     @State private var timeFrom = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var timeTo = Calendar.current.date(bySettingHour: 19, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var weekdays: Set<Int> = [1, 2, 3, 4, 5, 6]

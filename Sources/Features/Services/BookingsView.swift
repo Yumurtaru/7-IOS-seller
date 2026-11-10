@@ -275,8 +275,9 @@ struct BookingRow: View {
     private var cancelHint: String? {
         guard let day = booking.date, !day.isEmpty, let t = booking.timeStart, !t.isEmpty else { return nil }
         let full = t.count == 5 ? t + ":00" : String(t.prefix(8))
-        guard let start = DateFmt.parse(day + " " + full), start <= Date() else { return nil }
-        if DateFmt.ymdMoscow(Date()) > day {
+        // П-68: дата + time_start — стенные часы города заведения (нет поля timezone — Москва).
+        guard let start = ShopTime.wallDate(day + " " + full), start <= Date() else { return nil }
+        if ShopTime.ymd() > day {
             return "Визит был не сегодня: «не пришёл» отмечается только в день визита, поэтому запись закроется как выполненная."
         }
         return "Визит уже начался — запись будет отмечена «Клиент не пришёл»."

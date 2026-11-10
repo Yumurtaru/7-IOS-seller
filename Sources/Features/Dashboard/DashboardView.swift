@@ -122,11 +122,18 @@ struct DashboardView: View {
     @StateObject private var vm = DashboardViewModel()
     /// А82: блоки «Оплаты» и «Контроль потерь» — свои запросы, свой счётчик.
     @StateObject private var pro = SalesDashboardModel()
+    /// Помощник Yumurta: карточка «Помощник» — только пока он включён в админке сайта.
+    @ObservedObject private var assistant = AssistantFeature.shared
+    // Переход в чат — вне условного блока: если помощника выключат, пока чат открыт, кнопка
+    // пропадёт, а экран чата останется и покажет «Помощник сейчас выключен».
+    @State private var showAssistant = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
+                    // Заметный вход в помощника (те же тексты, что на Android).
+                    if assistant.available { assistantCard }
                     Picker("Период", selection: $vm.period) {
                         Text("Сегодня").tag("today")
                         Text("Неделя").tag("week")
@@ -164,6 +171,7 @@ struct DashboardView: View {
             }
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("Дашборд")
+            .navigationDestination(isPresented: $showAssistant) { AssistantView() }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // «Пауза / На проверке / Не опубликован» — метка под названием в
@@ -171,6 +179,7 @@ struct DashboardView: View {
                 ToolbarItem(placement: .principal) { ShopSwitcherMenu() }
             }
             .refreshable {
+                Task { await AssistantFeature.shared.refresh(shopId: session.activeShopId, force: true) }
                 await vm.load()
                 // А82: блоки — принудительно, но не держим ими крутилку «потянуть вниз».
                 Task { await pro.load(force: true) }
@@ -179,6 +188,8 @@ struct DashboardView: View {
                        emptyIcon: "chart.bar", emptyTitle: "Нет данных",
                        retry: { Task { await vm.load() } })
             .task { await vm.load() }
+            // Открыли дашборд — перечитываем, не выключили ли помощника.
+            .task { await AssistantFeature.shared.refresh(shopId: session.activeShopId, force: true) }
             // А82: не чаще раза в 5 минут (см. SalesDashboardModel.load).
             .task { await pro.load() }
             // Звенит новый заказ — «Активные заказы» и цифры обновляем сами,
@@ -193,6 +204,14 @@ struct DashboardView: View {
                 Task { await pro.load() }
             }
         }
+    }
+
+    // ── Помощник Yumurta ─────────────────────────────────────────────────────
+    private var assistantCard: some View {
+        Button { showAssistant = true } label: {
+            AssistantEntryRowLabel(title: AssistantGate.title, subtitle: AssistantGate.subtitle)
+        }
+        .buttonStyle(.plain)
     }
 
     // ── Публикация (draft/review) ────────────────────────────────────────────
@@ -502,7 +521,7 @@ struct DashboardView: View {
                             // П-26.3: предзаказ «к времени» и «сдача с …» прямо на сводке —
                             // заказ на завтра не должен выглядеть заказом «прямо сейчас».
                             if let pre = order.preorderAt, !pre.isEmpty {
-                                Label("Ко времени: " + DateFmt.short(pre), systemImage: "clock.fill")
+                                Label("Ко времени: " + DateFmt.wall(pre), systemImage: "clock.fill")
                                     .font(.caption.weight(.bold))
                                     .foregroundColor(Brand.amber)
                                     .lineLimit(1)

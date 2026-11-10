@@ -21,6 +21,8 @@ final class ExportsViewModel: ObservableObject {
     @Published var busy: String?          // какой экспорт сейчас качается
     @Published var error: String?
     @Published var shareFile: ShareFile?
+    /// Предупреждение сервера к файлу (сейчас — только 1С: не задана ставка НДС магазина).
+    @Published var warning: String?
 
     func exportOrders(from: Date, to: Date) async {
         await run("orders") {
@@ -36,6 +38,15 @@ final class ExportsViewModel: ObservableObject {
 
     /// key совпадает с последним сегментом пути: products, clients, 1c и т.д.
     func exportData(_ key: String, fileName: String) async {
+        if key == "1c" {
+            // Заголовок X-Yumurta-Warning: vat_not_set приходит вместе с файлом — файл отдаём, предупреждение показываем.
+            await run("data-1c") {
+                let r = try await API.shared.export1C()
+                if r.vatNotSet { self.warning = ExpLogic.vatWarning }
+                return r.url
+            }
+            return
+        }
         await run("data-" + key) {
             try await API.shared.exportData(key, fallbackName: fileName)
         }
@@ -44,6 +55,7 @@ final class ExportsViewModel: ObservableObject {
     private func run(_ key: String, _ op: @escaping () async throws -> URL) async {
         guard busy == nil else { return }
         error = nil
+        warning = nil
         busy = key
         defer { busy = nil }
         do {
@@ -59,11 +71,26 @@ final class ExportsViewModel: ObservableObject {
 struct ExportsView: View {
     @EnvironmentObject private var session: Session
     @StateObject private var vm = ExportsViewModel()
+    /// Есть ли на сервере «Выгрузка с фильтрами» (старый сервер — 404/405, строки нет, экран как раньше).
+    @ObservedObject private var exportFeature = ExportFeature.shared
     @State private var from = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var to = Date()
 
     var body: some View {
         Form {
+            if exportFeature.available
+                && !ExpLogic.kinds(shopType: session.shopType, can: { session.can($0) }).isEmpty {
+                Section {
+                    NavigationLink { ExportJobView() } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(ExpLogic.newTitle).foregroundColor(Brand.text)
+                            Text(ExpLogic.newHint).font(.caption).foregroundColor(Brand.muted)
+                        }
+                    }
+                }
+                .listRowBackground(Brand.card)
+            }
+
             // Сервер закрывает выгрузку правом по её СОДЕРЖИМОМУ: заказы —
             // «Заказы», клиенты — «Клиенты», склад — «Склад», кошелёк —
             // «Финансы», остальное — «Товары». Раньше экран рисовал всё подряд,
@@ -158,6 +185,13 @@ struct ExportsView: View {
                 .listRowBackground(Brand.card)
             }
 
+            if let w = vm.warning {
+                Section {
+                    Text(w).font(.footnote).foregroundColor(Brand.amber)
+                }
+                .listRowBackground(Color.clear)
+            }
+
             if let err = vm.error {
                 Section {
                     Text(err).font(.footnote).foregroundColor(Brand.red)
@@ -169,6 +203,7 @@ struct ExportsView: View {
         .background(Brand.bg.ignoresSafeArea())
         .navigationTitle("Экспорт данных")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: session.activeShopId) { await exportFeature.refresh(shopId: session.activeShopId) }
         .sheet(item: $vm.shareFile) { file in
             ShareSheet(items: [file.url])
         }

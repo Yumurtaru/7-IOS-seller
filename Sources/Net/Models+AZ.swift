@@ -15,14 +15,20 @@ struct ShopPauseInfo: Decodable {
     /// ВВ (сайт А819): true — паузу поставил администратор площадки, продавец её не снимает.
     /// Ключа нет (старый сервер) — false.
     var admin = false
+    /// П-68: тот же момент unix-секундами; nil — бессрочно / поля нет (старый сервер).
+    var untilTs: Int?
 
-    enum CodingKeys: String, CodingKey { case until, reason, admin }
+    enum CodingKeys: String, CodingKey {
+        case until, reason, admin
+        case untilTs = "until_ts"
+    }
 
     init(from decoder: Decoder) throws {
         guard let c = try? decoder.container(keyedBy: CodingKeys.self) else { return }
         until = ((try? c.decodeIfPresent(LenientString.self, forKey: .until)) ?? nil)?.wrappedValue
         reason = ((try? c.decodeIfPresent(LenientString.self, forKey: .reason)) ?? nil)?.wrappedValue
         admin = ((try? c.decodeIfPresent(LenientBool.self, forKey: .admin)) ?? nil)?.wrappedValue ?? false
+        untilTs = ((try? c.decodeIfPresent(LenientInt.self, forKey: .untilTs)) ?? nil)?.wrappedValue.flatMap { $0 > 0 ? $0 : nil }
     }
 }
 
@@ -34,11 +40,14 @@ struct ShopStatusAck: Decodable {
     var hasPauseUntil = false
     var pauseUntil: String?
     var pauseReason: String?
+    /// П-68: pause_until_ts — тот же момент unix-секундами; nil — бессрочно / поля нет.
+    var pauseUntilTs: Int?
 
     enum CodingKeys: String, CodingKey {
         case status
         case pauseUntil = "pause_until"
         case pauseReason = "pause_reason"
+        case pauseUntilTs = "pause_until_ts"
     }
 
     init(from decoder: Decoder) throws {
@@ -47,6 +56,7 @@ struct ShopStatusAck: Decodable {
         hasPauseUntil = c.contains(.pauseUntil)
         pauseUntil = ((try? c.decodeIfPresent(LenientString.self, forKey: .pauseUntil)) ?? nil)?.wrappedValue
         pauseReason = ((try? c.decodeIfPresent(LenientString.self, forKey: .pauseReason)) ?? nil)?.wrappedValue
+        pauseUntilTs = ((try? c.decodeIfPresent(LenientInt.self, forKey: .pauseUntilTs)) ?? nil)?.wrappedValue.flatMap { $0 > 0 ? $0 : nil }
     }
 }
 

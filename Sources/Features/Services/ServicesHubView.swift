@@ -42,7 +42,7 @@ struct ServicesHubView: View {
     /// АZ: проба «Журнала записи на день» при открытии раздела.
     private func probeJournal() async {
         do {
-            let d = try await API.shared.slotsDay(date: DateFmt.ymd(Date()))
+            let d = try await API.shared.slotsDay(date: ShopTime.ymd())
             setJournal(d.hasColumns)
         } catch is CancellationError {
         } catch let e as APIDetailedError {

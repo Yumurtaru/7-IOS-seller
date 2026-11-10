@@ -52,12 +52,32 @@ final class ProductEditViewModel: ObservableObject {
     @Published var photos: [ProductPhoto] = []
     @Published var modifierGroups: [ModifierGroup] = []
 
+    // ── O1: оптовые цены ────────────────────────────────────────────────────
+    /// Ступени в редакторе. Правка продавцом помечает блок «тронутым».
+    @Published var tierRows: [Wholesale.Row] = [] {
+        didSet { if tierRows != oldValue { tiersTouched = true; tiersError = nil } }
+    }
+    /// Текст ошибки под блоком (локальная проверка).
+    @Published var tiersError: String?
+    /// Продавец менял блок: ключ price_tiers уходит, даже если сервер его не присылал.
+    private var tiersTouched = false
+    /// Сервер прислал price_tiers у товара (новый сервер) — ключ уходит всегда.
+    private var serverSentTiers = false
+    /// Признак дробного количества у товара (штучный = нет признака и единица «шт»).
+    private var qtyFractional = false
+
     @Published var state: LoadState = .idle
     @Published var error: String?
     @Published var isSaving = false
     @Published var isUploading = false
     @Published var aiInfo: String?
     @Published var isGenerating = false
+    /// short | normal | detailed — стиль AI-описания (по умолчанию «Обычно»).
+    @Published var aiStyle = "normal"
+    /// Ручки описания нового товара нет (404/405) — кнопка спрятана до перезапуска экрана.
+    @Published var aiNewMissing = false
+    /// Ответ ИИ ждёт подтверждения «Заменить описание?», если поле уже заполнено.
+    @Published var pendingAiText: String?
 
     static let knownAllergens = ["Глютен", "Молоко", "Яйца", "Орехи", "Арахис", "Соя", "Рыба", "Морепродукты", "Кунжут", "Горчица"]
     static let knownTags = ["Новинка", "Хит", "Острое", "Веган", "Халяль", "Без сахара", "Детское"]
@@ -113,6 +133,8 @@ final class ProductEditViewModel: ObservableObject {
         article = d.article; barcode = d.barcode; tags = d.tags; allergens = d.allergens
         calories = d.calories; proteins = d.proteins; fats = d.fats; carbs = d.carbs
         status = d.status; isAvailable = d.isAvailable; isMarked = d.isMarked
+        tierRows = (d.tiers ?? []).map { Wholesale.Row(qty: $0.qty, price: $0.price) }
+        tiersTouched = !tierRows.isEmpty
     }
 
     private func draft(maybeSent: Bool) -> ProductDraft {
@@ -121,6 +143,7 @@ final class ProductEditViewModel: ObservableObject {
                      article: article, barcode: barcode, tags: tags, allergens: allergens,
                      calories: calories, proteins: proteins, fats: fats, carbs: carbs,
                      status: status, isAvailable: isAvailable, isMarked: isMarked,
+                     tiers: tierRows.isEmpty ? nil : tierRows.map { DraftTier(qty: $0.qty, price: $0.price) },
                      maybeSent: maybeSent)
     }
 
@@ -149,6 +172,9 @@ final class ProductEditViewModel: ObservableObject {
         let fresh = ProductEditViewModel(productId: nil)
         // Новый экземпляр уже не найдёт черновика — берём его умолчания.
         apply(fresh.draft(maybeSent: false))
+        tierRows = []
+        tiersTouched = false
+        tiersError = nil
         restoredDraft = false
         draftMaybeSent = false
         error = nil
@@ -194,6 +220,11 @@ final class ProductEditViewModel: ObservableObject {
             isAvailable = p.isAvailable ?? true
             isMarked = p.isMarked ?? false
             photos = p.photos ?? []
+            serverSentTiers = p.priceTiers != nil
+            qtyFractional = (p.qtyFractional ?? 0) == 1
+            tierRows = Wholesale.rows(from: p.priceTiers)
+            tiersTouched = false
+            tiersError = nil
             let mods = (try? await API.shared.productModifiers(productId: id)) ?? []
             guard gen == loadGen else { return }
             modifierGroups = mods
@@ -255,6 +286,14 @@ final class ProductEditViewModel: ObservableObject {
         return t.isEmpty ? nil : t
     }
 
+    /// 422 с errors.price_tiers: первый текст сервера — под блоком «Оптовые цены».
+    private static func tiersText(_ error: Error) -> String? {
+        guard let d = error as? APIDetailedError,
+              let t = d.fields["price_tiers"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !t.isEmpty else { return nil }
+        return t
+    }
+
     func save() async -> Bool {
         // Двойной тап «Сохранить» у нового товара создавал два одинаковых товара.
         guard !isSaving else { return false }
@@ -273,6 +312,17 @@ final class ProductEditViewModel: ObservableObject {
             error = "Укажите корректную цену"; return false
         }
         let priceValue = "\(priceNum)"
+        // O1: оптовые ступени. Право «Цены» — как у поля цены: без него ключ не шлём.
+        var tiersBody: [[String: Any]]?
+        if Session.shared.can("products.price") && (serverSentTiers || tiersTouched) {
+            if let msg = Wholesale.validate(rows: tierRows, retail: priceNum,
+                                            piece: Wholesale.isPiece(unit: unit, fractional: qtyFractional)) {
+                tiersError = msg
+                return false
+            }
+            tiersBody = Wholesale.payload(rows: tierRows)   // все строки удалены — []
+        }
+        tiersError = nil
         // Старая цена — деньги: копейки, не тысячные (иначе сервер округлял молча).
         if let t = dec(priceOld), Money.strict(t) == nil {
             error = "Старая цена — сумма, например 1500 или 99,90"; return false
@@ -309,6 +359,8 @@ final class ProductEditViewModel: ObservableObject {
             "is_available": isAvailable ? 1 : 0,
             "is_marked": isMarked ? 1 : 0,
         ]
+        // Ключ — только если сервер прислал поле или продавец трогал блок (иначе его нет совсем).
+        if let tiersBody = tiersBody { fields["price_tiers"] = tiersBody }
         // ВВ (А819): скрыт модератором — ключ статуса не шлём совсем (не null): сервер оставит hidden,
         // а остальные поля сохранит.
         if Bb.statusForSave(hidden: status == "hidden", moderationHidden: moderationHidden) == nil {
@@ -323,7 +375,7 @@ final class ProductEditViewModel: ObservableObject {
             try await API.shared.saveProduct(id: id, fields: body)
             return true
         } catch {
-            self.error = error.localizedDescription
+            if let t = Self.tiersText(error) { tiersError = t } else { self.error = error.localizedDescription }
             return false
         }
     }
@@ -367,7 +419,7 @@ final class ProductEditViewModel: ObservableObject {
                     draftMaybeSent = true
                     self.error = msg + ". Прошлая попытка могла создать товар — проверьте список товаров, прежде чем сохранять снова."
                 } else {
-                    self.error = raw
+                    if let t = Self.tiersText(error) { tiersError = t } else { self.error = raw }
                 }
                 // 401 на первой попытке — запрос не выполнен: черновик без пометки
                 // «могло дойти» (ключ черновика взят при открытии и пережил выход).
@@ -463,23 +515,52 @@ final class ProductEditViewModel: ObservableObject {
 
     /// AI-описание — ЧЕРНОВИК (сервер в БД не пишет), продавец правит и сохраняет сам.
     func generateDescription() async {
-        guard let id = productId else {
-            error = "Сначала сохраните товар — AI использует название и фото"
+        let id = productId
+        let nm = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id == nil && nm.isEmpty {
+            error = "Сначала укажите название"
             return
         }
         isGenerating = true
         error = nil
         aiInfo = nil
         defer { isGenerating = false }
+        let desc = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let un = unit.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wt = weight.trimmingCharacters(in: .whitespacesAndNewlines)
+        var body: [String: Any?] = ["style": aiStyle]
+        if !nm.isEmpty { body["name"] = nm }
+        if let c = categoryId, c > 0 { body["category_id"] = c }
+        if !un.isEmpty { body["unit"] = un }
+        if !wt.isEmpty { body["weight"] = wt }
+        if !tags.isEmpty { body["tags"] = tags }
+        if !allergens.isEmpty { body["allergens"] = allergens }
+        if !desc.isEmpty { body["description"] = desc }
         do {
-            let res = try await API.shared.aiDescription(productId: id)
-            if let text = res.description, !text.isEmpty { descriptionText = text }
-            if let used = res.usedToday, let limit = res.limit {
-                aiInfo = "AI-генераций сегодня: \(used) из \(limit)"
+            let res = try await API.shared.aiDescription(productId: id, body: body)
+            var parts: [String] = []
+            if res.photoUsed == true { parts.append("Учтено фото товара") }
+            if let used = res.usedToday, let limit = res.limit { parts.append("Сегодня: \(used) из \(limit)") }
+            aiInfo = parts.isEmpty ? nil : parts.joined(separator: ". ")
+            if let text = res.description, !text.isEmpty {
+                // Поле не пустое — спрашиваем «Заменить описание?» (экран показывает алерт).
+                if descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { descriptionText = text }
+                else { pendingAiText = text }
             }
         } catch {
+            // Новой ручки на сервере нет (404/405): кнопку для нового товара прячем до перезапуска экрана.
+            if id == nil, ProductEditViewModel.isMissingAiRoute(error) {
+                aiNewMissing = true
+                return
+            }
             self.error = error.localizedDescription   // в т.ч. «Дневной лимит…» (429)
         }
+    }
+
+    private static func isMissingAiRoute(_ error: Error) -> Bool {
+        if let e = error as? APIDetailedError { return e.status == 404 || e.status == 405 }
+        if case APIError.http(let c) = error { return c == 404 || c == 405 }
+        return false
     }
 }
 
@@ -629,22 +710,42 @@ struct ProductEditView: View {
                 Section("Описание") {
                     TextEditor(text: $vm.descriptionText)
                         .frame(minHeight: 90)
-                    Button {
-                        Task { await vm.generateDescription() }
-                    } label: {
-                        HStack {
-                            if vm.isGenerating { ProgressView() } else { Image(systemName: "sparkles") }
-                            Text("Сгенерировать описание (AI)")
+                    if vm.productId != nil || !vm.aiNewMissing {
+                        Picker("Стиль", selection: $vm.aiStyle) {
+                            Text("Коротко").tag("short")
+                            Text("Обычно").tag("normal")
+                            Text("Подробно").tag("detailed")
                         }
-                    }
-                    .disabled(vm.isGenerating || vm.productId == nil)
-                    if let info = vm.aiInfo {
-                        Text(info).font(.caption).foregroundColor(Brand.muted)
-                    }
-                    if vm.productId == nil {
+                        .pickerStyle(.segmented)
+                        Button {
+                            Task { await vm.generateDescription() }
+                        } label: {
+                            HStack {
+                                if vm.isGenerating { ProgressView() } else { Image(systemName: "sparkles") }
+                                Text(vm.productId == nil ? "Придумать описание" : "Сгенерировать описание (AI)")
+                            }
+                        }
+                        .disabled(vm.isGenerating)
+                    } else {
+                        // Сайт ещё без ручки для нового товара — как раньше.
                         Text("AI-описание доступно после сохранения товара")
                             .font(.caption).foregroundColor(Brand.muted)
                     }
+                    if let info = vm.aiInfo {
+                        Text(info).font(.caption).foregroundColor(Brand.muted)
+                    }
+                }
+                .alert("Заменить описание?", isPresented: Binding(
+                    get: { vm.pendingAiText != nil },
+                    set: { if !$0 { vm.pendingAiText = nil } }
+                )) {
+                    Button("Заменить") {
+                        if let t = vm.pendingAiText { vm.descriptionText = t }
+                        vm.pendingAiText = nil
+                    }
+                    Button("Отмена", role: .cancel) { vm.pendingAiText = nil }
+                } message: {
+                    Text("Текущее описание будет заменено предложенным.")
                 }
 
                 // П-22.1: без права «Цены» сервер отклоняет (403) ВСЁ сохранение, если
@@ -664,6 +765,8 @@ struct ProductEditView: View {
                         Text("Цену меняет сотрудник с правом «Менять цены» или владелец.")
                     }
                 }
+
+                wholesaleSection
 
                 Section("Учёт") {
                     TextField("Артикул", text: $vm.article)
@@ -804,13 +907,54 @@ struct ProductEditView: View {
     /// Новый товар без права «Цены» — сохранить нельзя (сервер ответит 403).
     private var createLocked: Bool { vm.productId == nil && !canEditPrice }
 
+    /// O1: «Оптовые цены». Право «Цены» — как у поля цены.
+    private var wholesaleSection: some View {
+        let unitText = Wholesale.unitLabel(vm.unit)
+        return Section {
+            ForEach($vm.tierRows) { $row in
+                HStack(spacing: 6) {
+                    Text("от")
+                    TextField("0", text: $row.qty).keyboardType(.decimalPad)
+                        .multilineTextAlignment(.center).frame(width: 64)
+                    Text(unitText)
+                    Text("—")
+                    TextField("0", text: $row.price).keyboardType(.decimalPad)
+                        .multilineTextAlignment(.center).frame(width: 72)
+                    Text("₽ за \(unitText)").lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button {
+                        let id = row.id
+                        vm.tierRows.removeAll { $0.id == id }
+                    } label: {
+                        Image(systemName: "trash").foregroundColor(Brand.red)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Удалить ступень")
+                }
+                .font(.subheadline)
+                .disabled(!canEditPrice)
+            }
+            if vm.tierRows.count < Wholesale.maxTiers {
+                Button("+ Добавить ступень") { vm.tierRows.append(Wholesale.Row()) }
+                    .disabled(!canEditPrice)
+            }
+            if let err = vm.tiersError {
+                Text(err).foregroundColor(Brand.red).font(.footnote)
+            }
+        } header: {
+            Text("Оптовые цены")
+        } footer: {
+            Text(Wholesale.hint)
+        }
+    }
+
     private var photosSection: some View {
         Section("Фото (\(vm.photos.count)/5)") {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(vm.photos) { photo in
                         ZStack(alignment: .topTrailing) {
-                            RemoteImage(path: photo.pathWebp, size: 84, cornerRadius: 12)
+                            RemoteImage(path: photo.pathWebp, size: 84, cornerRadius: 12, fit: true)
                             Button {
                                 Task { await vm.deletePhoto(photo) }
                             } label: {

@@ -15,11 +15,15 @@ struct AssistantView: View {
     /// Ссылка из ответа — во встроенном браузере (SFSafariViewController).
     @State private var link: PayLink?
     @State private var confirmHandoff = false
+    /// Открыт из «Техподдержки» — «Написать в поддержку» просто возвращает в её чат;
+    /// иначе (дашборд, «Ещё») чат поддержки открывается поверх.
+    var fromSupport = false
+    @State private var showSupport = false
 
     var body: some View {
         VStack(spacing: 0) {
             AssistantHeaderNote(vm: vm)
-            AssistantMessageList(vm: vm)
+            AssistantMessageList(vm: vm, onSupport: openSupport)
             if vm.enabled && vm.state == .loaded {
                 AssistantComposer(vm: vm, onHandoff: { confirmHandoff = true })
             }
@@ -36,6 +40,7 @@ struct AssistantView: View {
             SafariView(url: l.url).ignoresSafeArea()
         }
         .task { await vm.start() }
+        .navigationDestination(isPresented: $showSupport) { ShopSupportView() }
         // Сменили организацию, пока экран открыт, — переписка новой.
         .onChange(of: session.activeShopId) { _ in
             Task { await vm.load() }
@@ -47,10 +52,14 @@ struct AssistantView: View {
             Text("Сотрудник увидит вопросы и ответы помощника и ответит в разделе «Техподдержка».")
         }
         .alert(vm.handedTo ?? "", isPresented: handedBinding) {
-            Button("Открыть Техподдержку") { dismiss() }
+            Button("Открыть Техподдержку") { openSupport() }
         } message: {
             Text("Ответ сотрудника придёт в чат техподдержки.")
         }
+    }
+
+    private func openSupport() {
+        if fromSupport { dismiss() } else { showSupport = true }
     }
 
     private var handedBinding: Binding<Bool> {
@@ -110,6 +119,7 @@ struct AssistantHeaderNote: View {
 // ── Лента ────────────────────────────────────────────────────────────────────
 struct AssistantMessageList: View {
     @ObservedObject var vm: AssistantViewModel
+    let onSupport: () -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -158,8 +168,9 @@ struct AssistantMessageList: View {
                 EmptyState(icon: "sparkles",
                            title: vm.status?.loginRequired == true
                                ? "Войдите в аккаунт, чтобы задать вопрос помощнику."
-                               : "Помощник сейчас выключен.",
-                           subtitle: "Напишите в Техподдержку — ответит человек.")
+                               : AssistantGate.offText(serverMessage: vm.offMessage),
+                           actionTitle: AssistantGate.writeSupport,
+                           action: onSupport)
             }
         }
     }
@@ -377,8 +388,10 @@ struct AssistantComposer: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            noticeRow
             errorRow
             infoRow
+            suggestionsStrip
             metaRow
             counter
             inputRow
@@ -386,6 +399,48 @@ struct AssistantComposer: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(Brand.card)
+    }
+
+    /// 152-ФЗ: текст сервера как есть, пока в чате нет ни одного сообщения пользователя.
+    @ViewBuilder
+    private var noticeRow: some View {
+        let n = vm.status?.notice ?? ""
+        if !n.isEmpty && !vm.messages.contains(where: { $0.isUser }) {
+            Text(n)
+                .font(.footnote)
+                .foregroundColor(Brand.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Brand.chip)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    /// Подсказки и после первых сообщений: лентой над полем, пока человек не набирает текст.
+    @ViewBuilder
+    private var suggestionsStrip: some View {
+        let list = (vm.status?.suggestions ?? []).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        if !vm.messages.isEmpty && !list.isEmpty && vm.draft.isEmpty && !vm.sending {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(list.enumerated()), id: \.offset) { _, q in
+                        Button {
+                            Task { await vm.send(q) }
+                        } label: {
+                            Text(q)
+                                .font(.footnote)
+                                .foregroundColor(Brand.text)
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .overlay(Capsule().stroke(Brand.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
     }
 
     /// 502/504 — вопрос уже сохранён: «Позвать человека» (повтора нет, как на сайте);
@@ -492,30 +547,41 @@ struct AssistantEntryRow: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.title3)
-                    .foregroundColor(Brand.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Спросить помощника")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(Brand.text)
-                    Text("ИИ ответит сразу по базе знаний")
-                        .font(.caption)
-                        .foregroundColor(Brand.muted)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundColor(Brand.muted)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Brand.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            AssistantEntryRowLabel(title: "Спросить помощника", subtitle: "ИИ ответит сразу по базе знаний")
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 12)
         .padding(.top, 8)
+    }
+}
+
+/// Карточка входа в помощника: «Техподдержка» (Спросить помощника) и дашборд (Помощник).
+struct AssistantEntryRowLabel: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.title3)
+                .foregroundColor(Brand.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(Brand.text)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(Brand.muted)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(Brand.muted)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Brand.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

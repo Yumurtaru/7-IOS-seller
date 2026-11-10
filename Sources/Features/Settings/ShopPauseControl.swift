@@ -88,8 +88,8 @@ struct ShopStatusControl: View {
         // Срок паузы кончается сам: крон сервера снимает её раз в минуту — через ~70 секунд
         // после срока (по часам МСК) один раз перечитываем настройки. Только пока экран открыт.
         .task(id: autoRefreshKey) {
-            guard session.shopStatus == "paused", let until = session.pauseUntil,
-                  let d = DateFmt.parse(until) else { return }
+            guard session.shopStatus == "paused",
+                  let d = Az.untilDate(session.pauseUntil, ts: session.pauseUntilTs) else { return }
             let wait = d.timeIntervalSinceNow + 70
             if wait <= 0 {
                 // Срок уже прошёл (открыли экран позже): сразу перечитываем — крон мог снять паузу.
@@ -102,7 +102,7 @@ struct ShopStatusControl: View {
         }
     }
 
-    private var autoRefreshKey: String { session.shopStatus + "|" + (session.pauseUntil ?? "") }
+    private var autoRefreshKey: String { session.shopStatus + "|" + (session.pauseUntil ?? "") + "|" + String(session.pauseUntilTs ?? 0) }
 
     private var isPaused: Bool { session.shopStatus != "active" }
 
@@ -112,7 +112,7 @@ struct ShopStatusControl: View {
     /// Заголовок: «Магазин открыт» / «На паузе до ЧЧ:ММ» / «Магазин на паузе».
     private var title: String {
         if !isPaused { return "Магазин открыт" }
-        if session.pauseKnown, let t = Az.pauseTitle(until: session.pauseUntil) { return t }
+        if session.pauseKnown, let t = Az.pauseTitle(until: session.pauseUntil, ts: session.pauseUntilTs) { return t }
         return "Магазин на паузе"
     }
 
@@ -123,7 +123,7 @@ struct ShopStatusControl: View {
         }
         var out: [String] = []
         if let r = session.pauseReason, !r.isEmpty { out.append("Причина: " + r) }
-        if Az.activeUntil(session.pauseUntil) != nil {
+        if Az.isUntilActive(session.pauseUntil, ts: session.pauseUntilTs) {
             out.append("Приём включится сам.")
         } else if out.isEmpty {
             out.append("На паузе клиенты не могут оформлять заказы")

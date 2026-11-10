@@ -140,6 +140,8 @@ struct RemoteImage: View {
     var size: CGFloat = 56
     var cornerRadius: CGFloat = 10
     var placeholderIcon: String = "photo"
+    /// true для фото ТОВАРА: показывать целиком (scaledToFit), без кадрирования.
+    var fit: Bool = false
 
     var body: some View {
         Group {
@@ -149,7 +151,11 @@ struct RemoteImage: View {
                 CachedAsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
-                        image.resizable().scaledToFill()
+                        if fit {
+                            image.resizable().scaledToFit()
+                        } else {
+                            image.resizable().scaledToFill()
+                        }
                     case .failure:
                         placeholder
                     default:

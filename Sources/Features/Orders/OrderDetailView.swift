@@ -314,7 +314,7 @@ struct OrderDetailView: View {
     }
 
     private func preorderBanner(_ pre: String) -> some View {
-        Label("Ко времени: " + DateFmt.short(pre), systemImage: "clock.fill")
+        Label("Ко времени: " + DateFmt.wall(pre), systemImage: "clock.fill")
             .font(.headline)
             .foregroundColor(Brand.amber)
             .frame(maxWidth: .infinity, alignment: .leading)

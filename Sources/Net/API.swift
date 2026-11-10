@@ -397,6 +397,17 @@ final class API {
         return URLSession(configuration: cfg)
     }()
 
+    /// Скачивание готовых выгрузок: большой файл на медленной связи идёт долго - на весь ресурс до 30 минут.
+    /// Ожидание ответа на каждый запрос (timeoutInterval запроса) остаётся 90 с.
+    private let downloadSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 90
+        cfg.timeoutIntervalForResource = 1800
+        cfg.waitsForConnectivity = false
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: cfg)
+    }()
+
     /// А60/П-23.6: запуск импорта на большом файле идёт дольше минуты — для него
     /// отдельная сессия с длинным ожиданием ответа (обычная обрывала через 20 с,
     /// и владелец видел ошибку при идущем импорте). Без ожидания связи: обрыв
@@ -523,6 +534,13 @@ final class API {
     /// Без повторов, как у всех POST. Тело — с ключами по алфавиту (makeRequest).
     func postDetailed<T: Decodable>(_ path: String, body: [String: Any?] = [:], as type: T.Type) async throws -> T {
         try await perform(makeRequest("POST", path, jsonBody: body), as: type, detailed: true)
+    }
+
+    /// Как postDetailed, но ответ ждём до 90 с (долгая серверная операция: проводка прихода). Без повторов.
+    func postDetailedLong<T: Decodable>(_ path: String, body: [String: Any?] = [:], as type: T.Type) async throws -> T {
+        var req = makeRequest("POST", path, jsonBody: body)
+        req.timeoutInterval = 90
+        return try await perform(req, as: type, using: longSession, detailed: true)
     }
 
     /// А82: GET, отказ которого нужен с HTTP-статусом (APIDetailedError.status):
@@ -723,10 +741,13 @@ final class API {
     /// и один раз повторяем с тем же ключом. Остальные отказы — как у postIdempotent.
     /// detailedErrors (А80) — отказ сервера приходит как APIDetailedError (код и
     /// поля), а не APIError.server; по умолчанию — как раньше.
+    /// long — ответ ждём до 90 с отдельной сессией (создание заказов: сервер делает много записей).
     func postBodyKeyed<T: Decodable>(_ path: String, body: [String: Any?],
                                      idempotencyKey: String, detailedErrors: Bool = false,
+                                     long: Bool = false,
                                      as type: T.Type) async throws -> T {
         var req = makeRequest("POST", path, jsonBody: body)
+        if long { req.timeoutInterval = 90 }
         var clean = body.compactMapValues { $0 }
         clean["idempotency_key"] = idempotencyKey
         if let sorted = try? JSONSerialization.data(withJSONObject: clean, options: [.sortedKeys]) {
@@ -734,10 +755,10 @@ final class API {
         }
         req.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         do {
-            return try await perform(req, as: type, detailed: detailedErrors)
+            return try await perform(req, as: type, using: long ? longSession : nil, detailed: detailedErrors)
         } catch let e as IdempotencyError where e.code == "idempotency_in_progress" {
             try await Task.sleep(nanoseconds: 2_000_000_000)
-            return try await perform(req, as: type, detailed: detailedErrors)
+            return try await perform(req, as: type, using: long ? longSession : nil, detailed: detailedErrors)
         }
     }
 
@@ -774,6 +795,94 @@ final class API {
         req.httpBody = body
         req.timeoutInterval = 90
         return try await perform(req, as: type, using: longSession, detailed: detailed)
+    }
+
+    /// Приход по фото накладной: multipart с НЕСКОЛЬКИМИ файлами в поле files[]
+    /// (сервер читает files[] или file). Сессия с долгим ожиданием — до 10 снимков
+    /// на медленной сети не укладываются в обычные 60 с. Отказ — APIDetailedError
+    /// (статус, код, errors.code в extras). Без повторов: плодить платные задания нельзя.
+    func uploadFiles<T: Decodable>(_ path: String, field: String,
+                                   files: [(filename: String, mime: String, data: Data)],
+                                   as type: T.Type) async throws -> T {
+        let boundary = "yumurta-" + UUID().uuidString
+        var req = try baseRequest("POST", path)
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        for f in files {
+            let safeName = f.filename
+                .replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "\r", with: "")
+                .replacingOccurrences(of: "\n", with: "")
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(field)\"; filename=\"\(safeName)\"\r\n".utf8))
+            body.append(Data("Content-Type: \(f.mime)\r\n\r\n".utf8))
+            body.append(f.data)
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        req.httpBody = body
+        req.timeoutInterval = 90
+        return try await perform(req, as: type, using: longSession, detailed: true)
+    }
+
+    /// Импорт заданиями: multipart с ОДНИМ файлом (поле file), query — в адресе. Тело собирается во временный файл
+    /// кусками по 64 КБ и уходит потоком (upload fromFile): файл до 10 МБ в памяти целиком не держим.
+    /// source должен быть доступен на время вызова (security scope держит вызывающий). Отказ — APIDetailedError
+    /// (статус, код). Без повторов: загрузка создаёт задание на сервере.
+    func uploadFileStreamed<T: Decodable>(_ path: String, query: [String: String] = [:], field: String,
+                                          filename: String, mime: String, source: URL,
+                                          maxBytes: Int, as type: T.Type) async throws -> T {
+        let boundary = "yumurta-" + UUID().uuidString
+        let tmp = try await Task.detached(priority: .userInitiated) {
+            try API.buildMultipartFile(source: source, field: field, filename: filename, mime: mime,
+                                       boundary: boundary, maxBytes: maxBytes)
+        }.value
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        var req = try baseRequest("POST", path, query: query)
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 120
+        return try await perform(req, as: type, using: longSession, detailed: true, statusOnBareError: true, fromFile: tmp)
+    }
+
+    /// Собрать тело multipart во временный файл: шапка части, содержимое source кусками, хвост.
+    /// Файл больше maxBytes или нечитаемый — APIError.server с текстом (имя файла чистим от кавычек и переводов строк).
+    static func buildMultipartFile(source: URL, field: String, filename: String, mime: String,
+                                   boundary: String, maxBytes: Int) throws -> URL {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("uploads", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let out = dir.appendingPathComponent(UUID().uuidString + ".multipart")
+        guard fm.createFile(atPath: out.path, contents: nil) else { throw APIError.server("Не удалось прочитать файл") }
+        let safeName = filename
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+        do {
+            let writer = try FileHandle(forWritingTo: out)
+            defer { try? writer.close() }
+            let reader = try FileHandle(forReadingFrom: source)
+            defer { try? reader.close() }
+            var head = "--\(boundary)\r\n"
+            head += "Content-Disposition: form-data; name=\"\(field)\"; filename=\"\(safeName)\"\r\n"
+            head += "Content-Type: \(mime)\r\n\r\n"
+            try writer.write(contentsOf: Data(head.utf8))
+            var total = 0
+            while let chunk = try reader.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                total += chunk.count
+                if total > maxBytes {
+                    throw APIError.server("Файл больше 10 МБ — сервер такой не примет")
+                }
+                try writer.write(contentsOf: chunk)
+            }
+            try writer.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
+        } catch let e as APIError {
+            try? fm.removeItem(at: out)
+            throw e
+        } catch {
+            try? fm.removeItem(at: out)
+            throw APIError.server("Не удалось прочитать файл")
+        }
+        return out
     }
 
     /// Диагностика push: сервер шлёт уведомление на все токены этого пользователя
@@ -946,6 +1055,90 @@ final class API {
         return url
     }
 
+    /// Выгрузки заданиями: GET, отказ которого нужен со статусом и кодом (APIDetailedError), а ответ можно
+    /// ждать до 45 с (опрос задания сам двигает его на сервере до ~6 с). Без повторов: опрос повторит сам.
+    func getDetailedLongWait<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
+        var req = makeRequest("GET", path)
+        req.timeoutInterval = 45
+        return try await perform(req, as: type, using: longSession, detailed: true, statusOnBareError: true)
+    }
+
+    /// Скачивание файла ПОТОКОМ на диск (URLSession.download): большой файл не держится в памяти целиком.
+    /// Bearer, 401 → один общий refresh → один повтор; вместо файла пришёл JSON-конверт или код ≥ 400 —
+    /// текст сервера. vatNotSet — заголовок X-Yumurta-Warning: vat_not_set (ставка НДС магазина не задана).
+    func downloadToDisk(_ path: String, fallbackName: String,
+                        isRetryAfterRefresh: Bool = false) async throws -> (url: URL, vatNotSet: Bool) {
+        var req = try baseRequest("GET", path)
+        req.timeoutInterval = 90
+        let tmp: URL; let resp: URLResponse
+        do {
+            (tmp, resp) = try await downloadSession.download(for: req)
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw CancellationError() }
+            throw urlError.code == .timedOut ? APIError.timeout : APIError.network
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw APIError.network
+        }
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let http = resp as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        if status == 401 {
+            if !isRetryAfterRefresh {
+                switch await refresher.refresh(base: API.base) {
+                case .ok:
+                    return try await downloadToDisk(path, fallbackName: fallbackName, isRetryAfterRefresh: true)
+                case .transient:
+                    throw APIError.network
+                case .invalid:
+                    break
+                }
+            }
+            if let handler = onUnauthorized { await MainActor.run { handler() } }
+            throw APIError.unauthorized
+        }
+        let contentType = (http?.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        let isJson = contentType.contains("application/json")
+        if status >= 400 || isJson {
+            // Тело ошибки маленькое — читаем целиком.
+            let data = (try? Data(contentsOf: tmp)) ?? Data()
+            if let env = try? decoder.decode(SellerEnvelope<EmptyData>.self, from: data), !env.ok {
+                throw APIError.server(env.hasErrorText || status < 400 ? env.errorText : API.statusText(status))
+            }
+            if status >= 400 { throw status >= 500 ? APIError.http(status) : APIError.server(API.statusText(status)) }
+            // Код < 400, но вместо файла пришёл JSON без распознанного отказа: JSON как файл не сохраняем.
+            throw APIError.server("Не удалось получить файл")
+        }
+        var filename = fallbackName
+        if let disposition = http?.value(forHTTPHeaderField: "Content-Disposition"),
+           let range = disposition.range(of: "filename=\"") {
+            let tail = disposition[range.upperBound...]
+            if let end = tail.firstIndex(of: "\"") {
+                // Только безопасное имя: без разделителей пути и «..».
+                var n = String(tail[..<end])
+                for bad in ["/", "\\", ":"] { n = n.replacingOccurrences(of: bad, with: "_") }
+                n = n.replacingOccurrences(of: "..", with: "_")
+                while n.hasPrefix(".") { n.removeFirst() }
+                if !n.isEmpty { filename = n }
+            }
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("exports", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Файлы старше суток (сервер держит выгрузку сутки) убираем при каждой загрузке.
+        let cutoff = Date().addingTimeInterval(-24 * 3600)
+        let old = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for u in old {
+            let m = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let m, m < cutoff { try? FileManager.default.removeItem(at: u) }
+        }
+        let dest = dir.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: dest)
+        do { try FileManager.default.moveItem(at: tmp, to: dest) } catch { throw APIError.decoding }
+        let warn = (http?.value(forHTTPHeaderField: "X-Yumurta-Warning") ?? "").lowercased()
+        return (dest, warn.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "vat_not_set" })
+    }
+
     // ── Внутренности ─────────────────────────────────────────────────────────
 
     private func baseRequest(_ method: String, _ path: String, query: [String: String] = [:]) throws -> URLRequest {
@@ -1002,14 +1195,20 @@ final class API {
                                        isRetryAfterRefresh: Bool = false,
                                        using customSession: URLSession? = nil,
                                        detailed: Bool = false,
-                                       statusOnBareError: Bool = false) async throws -> T {
+                                       statusOnBareError: Bool = false,
+                                       fromFile: URL? = nil) async throws -> T {
         // Запись (не GET) доводим до ответа и в фоне — см. BackgroundSave.
         var bgToken: BackgroundSaveToken?
         if (req.httpMethod ?? "GET") != "GET" { bgToken = await BackgroundSave.begin() }
         defer { if let t = bgToken { BackgroundSave.end(t) } }
         let data: Data; let resp: URLResponse
         do {
-            (data, resp) = try await (customSession ?? session).data(for: req)
+            if let file = fromFile {
+                // Тело запроса лежит в файле и уходит потоком — в памяти целиком не держится (импорт до 10 МБ).
+                (data, resp) = try await (customSession ?? session).upload(for: req, fromFile: file)
+            } else {
+                (data, resp) = try await (customSession ?? session).data(for: req)
+            }
         } catch let urlError as URLError {
             if urlError.code == .cancelled { throw CancellationError() }   // отмена (дебаунс) — не повторяем
             throw urlError.code == .timedOut ? APIError.timeout : APIError.network
@@ -1037,7 +1236,7 @@ final class API {
                     var retry = req
                     retry.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
                     return try await perform(retry, as: type, isRetryAfterRefresh: true, using: customSession,
-                                             detailed: detailed, statusOnBareError: statusOnBareError)
+                                             detailed: detailed, statusOnBareError: statusOnBareError, fromFile: fromFile)
                 case .transient:
                     // Сервер/сеть не ответили на продление: сессия, скорее всего, жива —
                     // не выкидываем продавца на экран входа из-за мигнувшего интернета.

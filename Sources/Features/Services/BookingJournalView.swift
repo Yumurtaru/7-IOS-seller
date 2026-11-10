@@ -11,7 +11,7 @@ import SwiftUI
 @MainActor
 final class BookingJournalViewModel: ObservableObject {
     /// Выбранный день (начало суток по часам устройства; в запрос идёт «ГГГГ-ММ-ДД»).
-    @Published var date = Calendar.current.startOfDay(for: Date()) {
+    @Published var date = ShopTime.todayDate() {   // П-68: «сегодня» по часам заведения
         didSet {
             guard date != oldValue else { return }
             // Окна прежней даты под новой не показываем.
@@ -51,10 +51,10 @@ final class BookingJournalViewModel: ObservableObject {
     }
 
     func goToday() {
-        date = Calendar.current.startOfDay(for: Date())
+        date = ShopTime.todayDate()
     }
 
-    var isToday: Bool { Calendar.current.isDateInToday(date) }
+    var isToday: Bool { DateFmt.ymd(date) == ShopTime.ymd() }
 
     /// Окна с учётом чипа колонки.
     var visibleSlots: [SlotDaySlot] {

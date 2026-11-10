@@ -36,7 +36,7 @@ struct ShopSupportView: View {
         // А100: включён ли помощник — при каждом открытии раздела и смене организации
         // (старый сервер — 404, кнопки нет).
         .task(id: session.activeShopId) { await assistant.refresh(shopId: session.activeShopId) }
-        .navigationDestination(isPresented: $showAssistant) { AssistantView() }
+        .navigationDestination(isPresented: $showAssistant) { AssistantView(fromSupport: true) }
         // Опрос — только пока экран виден и приложение активно.
         .onAppear { screenAppeared() }
         .onDisappear { screenDisappeared() }

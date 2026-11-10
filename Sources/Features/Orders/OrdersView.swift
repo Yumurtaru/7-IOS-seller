@@ -503,7 +503,7 @@ struct OrderRow: View {
             // Крупнее и с плашкой: мелкую строку легко пропустить, а от этого
             // времени зависит, когда начинать готовить.
             if let pre = order.preorderAt, !pre.isEmpty {
-                Label("Ко времени: " + DateFmt.short(pre), systemImage: "clock.fill")
+                Label("Ко времени: " + DateFmt.wall(pre), systemImage: "clock.fill")
                     .font(.subheadline.weight(.bold))
                     .foregroundColor(Brand.amber)
                     .lineLimit(1)

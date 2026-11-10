@@ -23,6 +23,8 @@ final class Session: ObservableObject {
     @Published private(set) var pauseKnown = false
     /// До какого времени (МСК, «ГГГГ-ММ-ДД ЧЧ:ММ:СС») пауза; nil — бессрочная или паузы нет.
     @Published private(set) var pauseUntil: String?
+    /// П-68: срок паузы unix-секундами (pause.until_ts / pause_until_ts); nil — нет / старый сервер.
+    @Published private(set) var pauseUntilTs: Int?
     @Published private(set) var pauseReason: String?
     /// ВВ (сайт А819): паузу поставил АДМИНИСТРАТОР площадки (settings.pause.admin = true или 409 admin_paused) —
     /// тумблер и окно паузы недоступны. Ключа нет (старый сервер) — false.
@@ -238,6 +240,10 @@ final class Session: ObservableObject {
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         }
         permsRefreshedAt = .distantPast
+        // Незавершённые отправки «Создать заказы» прежнего аккаунта: при своём «Выйти» забываем.
+        // При истёкшей сессии (signOutNotice задан) вернётся тот же человек — ключ остаётся
+        // (имя записи включает магазин и пользователя, чужой её не подхватит).
+        if signOutNotice == nil { ReplPendingStore.clearAll() }
         DeepLinkRouter.shared.reset()
         isLoggedIn = false
     }
@@ -446,9 +452,11 @@ final class Session: ObservableObject {
     private func resetPause() {
         pauseKnown = false
         pauseUntil = nil
+        pauseUntilTs = nil
         pauseReason = nil
         pauseAdmin = false
         pauseChecked = false
+        ShopTime.reset()   // П-68: пояс заведения — снова Москва
     }
 
     /// Статус пришёл «со стороны» (список организаций, /me): если он другой, срок и причина
@@ -456,6 +464,7 @@ final class Session: ObservableObject {
     private func applyExternalStatus(_ st: String) {
         if st != shopStatus {
             pauseUntil = nil
+            pauseUntilTs = nil
             pauseReason = nil
             pauseAdmin = false   // статус сменил кто-то другой (в т.ч. администратор): метка устарела, настройки перечитают
             pauseChecked = false
@@ -476,12 +485,14 @@ final class Session: ObservableObject {
         if let pause {
             pauseKnown = true
             pauseUntil = (pause.until ?? "").isEmpty ? nil : pause.until
+            pauseUntilTs = pause.untilTs
             let r = (pause.reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             pauseReason = r.isEmpty ? nil : r
             pauseAdmin = pause.admin
         } else {
             pauseKnown = false
             pauseUntil = nil
+            pauseUntilTs = nil
             pauseReason = nil
             pauseAdmin = false
         }
@@ -507,6 +518,7 @@ final class Session: ObservableObject {
         // Нажатие в пути (statusGen) старым ответом не перебиваем — ни статус, ни срок паузы.
         guard sg == statusGen else { return nil }
         applyPause(res.pause)
+        ShopTime.set(res.shop?.timezone)   // П-68
         // Крон снял паузу — статус «открыт».
         if let st = res.shop?.status, st == "active" || st == "paused" {
             if st != shopStatus { externalStatusTick += 1 }
@@ -541,13 +553,15 @@ final class Session: ObservableObject {
             if shopStatus == "paused" {
                 if ack.hasPauseUntil {
                     pauseUntil = (ack.pauseUntil ?? "").isEmpty ? nil : ack.pauseUntil
+                    pauseUntilTs = ack.pauseUntilTs
                     let r = (ack.pauseReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     pauseReason = r.isEmpty ? nil : r
-                    return Az.pausedMessage(until: pauseUntil)
+                    return Az.pausedMessage(until: pauseUntil, ts: pauseUntilTs)
                 }
                 // Сайт откатили: срок не принят, пауза бессрочная. До следующей загрузки
                 // настроек считаем, что сервер паузу на время не знает.
                 pauseUntil = nil
+                pauseUntilTs = nil
                 pauseReason = nil
                 if pause?.hasTerm == true {
                     pauseKnown = false
@@ -556,6 +570,7 @@ final class Session: ObservableObject {
                 return Az.pausedMessage(until: nil)
             }
             pauseUntil = nil
+            pauseUntilTs = nil
             pauseReason = nil
             return Az.resumedMessage
         } catch {
@@ -587,6 +602,7 @@ final class Session: ObservableObject {
             if sg == statusGen, let s = shop.status, !s.isEmpty { applyExternalStatus(s) }
             if let n = shop.name, !n.isEmpty { shopName = n }
             if let sl = shop.slug, !sl.isEmpty { shopSlug = sl }
+            ShopTime.set(shop.timezone)   // П-68
         }
         // Тарифных планов в iOS-приложении нет: подписки продавцов живут
         // только на сайте и в Android. Выключатель features.plans с сервера

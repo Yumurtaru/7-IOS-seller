@@ -146,7 +146,8 @@ extension API {
     /// Поля — точно как принимает saveProduct() в core/seller_products.php.
     func saveProduct(id: Int?, fields: [String: Any?]) async throws {
         if let id = id {
-            _ = try await put("api/seller/products/\(id)", body: fields, as: BoolAck.self)
+            // Детальный отказ: errors.price_tiers (422) показывается под блоком «Оптовые цены».
+            _ = try await putDetailed("api/seller/products/\(id)", body: fields, as: BoolAck.self)
         } else {
             // П-27.14: с ключом повтора — «Сохранить» после обрыва не создаёт второй товар.
             _ = try await postKeyed("api/seller/products", body: fields, as: IdAck.self)
@@ -186,8 +187,12 @@ extension API {
         _ = try await delete("api/seller/products/\(productId)/photos/\(photoId)", as: BoolAck.self)
     }
 
-    func aiDescription(productId: Int) async throws -> AIDescription {
-        try await post("api/seller/products/\(productId)/ai-description", body: [:], as: AIDescription.self)
+    /// productId == nil — описание НОВОГО товара (до сохранения): POST api/seller/products/ai-description.
+    /// Пустые необязательные поля не кладём (makeRequest всё равно уберёт nil).
+    func aiDescription(productId: Int?, body: [String: Any?]) async throws -> AIDescription {
+        let path = productId.map { "api/seller/products/\($0)/ai-description" } ?? "api/seller/products/ai-description"
+        // postDetailed: нужен код ответа — 404/405 у ручки нового товара значит «сайт ещё без неё» (текст ошибки тот же).
+        return try await postDetailed(path, body: body, as: AIDescription.self)
     }
 
     func categories() async throws -> [SellerCategory] {

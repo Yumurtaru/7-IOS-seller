@@ -270,7 +270,7 @@ private struct BoostProductPicker: View {
                     dismiss()
                 } label: {
                     HStack(spacing: 10) {
-                        RemoteImage(path: product.photo, size: 40, cornerRadius: 8)
+                        RemoteImage(path: product.photo, size: 40, cornerRadius: 8, fit: true)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(product.name ?? "—")
                                 .font(.subheadline).foregroundColor(Brand.text).lineLimit(1)

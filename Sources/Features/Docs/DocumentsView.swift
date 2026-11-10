@@ -133,6 +133,9 @@ final class DocumentsViewModel: ObservableObject {
 struct DocumentsView: View {
     @StateObject private var vm = DocumentsViewModel()
     @State private var creating: DocType?
+    /// Приход по фото накладной: пункт есть, только если сервер ответил на GET /state (старый — 404).
+    @ObservedObject private var ocrFeature = InvoiceOcrFeature.shared
+    @State private var showOcr = false
     @State private var openDoc: StockDocument?
     @State private var cancelTarget: StockDocument?
     /// А316: отмена черновика (status → cancelled, без движений) — с вопросом.
@@ -244,9 +247,18 @@ struct DocumentsView: View {
                     ForEach(DocType.allCases) { t in
                         Button { creating = t } label: { Label(t.title, systemImage: t.icon) }
                     }
+                    // Приход по фото накладной: право «Склад», сервер включил распознавание.
+                    if ocrFeature.available && Session.shared.can("warehouse") {
+                        Divider()
+                        Button { showOcr = true } label: {
+                            Label("Приход по фото накладной", systemImage: "doc.text.viewfinder")
+                        }
+                    }
                 } label: { Image(systemName: "plus") }
             }
         }
+        .navigationDestination(isPresented: $showOcr) { InvoiceOcrHomeView() }
+        .task { await ocrFeature.refresh(shopId: Session.shared.activeShopId) }
         // Не только .idle: ушли с экрана посреди первой загрузки — она отменилась,
         // состояние осталось .loading, и при возврате спиннер висел навсегда.
         .task { if vm.state != .loaded { await vm.load() } }

@@ -15,25 +15,52 @@ import SwiftUI
 /// человека» ушло бы обращением покупателя, которого в приложении продавца не видно.
 /// Не @MainActor целиком (как PoolFeature): экраны берут его через
 /// @ObservedObject … = .shared в свойствах; состояние меняется в методах @MainActor.
+///
+/// Входы (дашборд, «Ещё», «Техподдержка») видны, только пока последний ответ status = enabled.
+/// enabled = false — скрываем сразу; ошибка сети — остаётся прежнее состояние (не мигаем);
+/// 404/405 (старый сервер) — скрываем. Перечитываем: при открытии дашборда, жесте вниз, смене
+/// магазина (force = true) и при возврате из фона (force = false — не чаще раза в минуту):
+/// выключение в админке сайта скрывает помощника без перезапуска приложения.
 final class AssistantFeature: ObservableObject {
     static let shared = AssistantFeature()
     @Published private(set) var available = false
 
     private var key: String?
     private var gen = 0
+    private var checkedAt: Date?
 
     private init() {}
 
+    /// Помощника выключили при открытом чате (503 / enabled = false): входы скрыть сразу.
     @MainActor
-    func refresh(shopId: Int?) async {
+    func hide() { gen += 1; available = false }
+
+    @MainActor
+    func refresh(shopId: Int?, force: Bool = true) async {
         let k = "\(Session.shared.user?.id ?? 0):\(shopId ?? 0)"
         // Другой магазин/аккаунт — прежний ответ не показываем, пока не придёт новый.
-        if k != key { available = false; key = k }
+        if k != key { available = false; key = k; checkedAt = nil }
+        let now = Date()
+        let gap = force ? AssistantGate.dedupe : AssistantGate.minInterval
+        guard AssistantGate.due(last: checkedAt, now: now, minGap: gap) else { return }
+        checkedAt = now
         gen += 1
         let g = gen
-        let s = try? await API.shared.assistantStatus()
+        var status: AssistantStatus?
+        var failed = false
+        var code = 0
+        do {
+            status = try await API.shared.assistantStatus()
+        } catch let e as AssistantError {
+            failed = true; code = e.status
+        } catch {
+            // Экран ушёл до ответа — следующий раз спросим снова.
+            if Task.isCancelled { checkedAt = nil; return }
+            failed = true
+        }
         guard g == gen, k == key else { return }
-        available = s.map { $0.enabled && $0.audience == AssistantText.audience } ?? false
+        available = AssistantGate.nextVisible(previous: available, failed: failed, httpCode: code,
+                                              enabled: status?.enabled ?? false, audience: status?.audience)
     }
 }
 
@@ -75,6 +102,8 @@ final class AssistantViewModel: ObservableObject {
     /// Передали в «Техподдержку»: экран показывает текст и уходит в чат.
     @Published var handedTo: String?
     @Published var draft = ""
+    /// Помощника выключили при открытом чате: текст сервера (nil — стандартная фраза).
+    @Published private(set) var offMessage: String?
 
     private var shopId: Int?
     // Поколение: после смены магазина или «Нового разговора» поздние ответы отбрасываем.
@@ -103,12 +132,13 @@ final class AssistantViewModel: ObservableObject {
         shopId = Session.shared.activeShopId
         state = .loading
         messages = []; chatId = nil; handed = false; sendError = nil; noAnswer = false
-        info = nil; ratingIds = []; sending = false; handing = false
+        info = nil; ratingIds = []; sending = false; handing = false; offMessage = nil
         do {
             let s = try await API.shared.assistantStatus()
             guard g == gen else { return }
             status = s
             leftToday = s.leftToday
+            if !s.enabled { AssistantFeature.shared.hide() }
             if s.enabled, let id = AssistantStore.get(shopId) {
                 do {
                     let h = try await API.shared.assistantChat(id: id)
@@ -125,6 +155,8 @@ final class AssistantViewModel: ObservableObject {
             state = .loaded
         } catch {
             guard g == gen else { return }
+            // Старый сервер без помощника: входы скрываем и здесь.
+            if let e = error as? AssistantError, e.status == 404 || e.status == 405 { AssistantFeature.shared.hide() }
             state = .failed(error.localizedDescription)
         }
     }
@@ -174,6 +206,8 @@ final class AssistantViewModel: ObservableObject {
             noAnswer = keep
             // Поле остаётся пустым (вопрос уже в переписке); показываем то, что на сервере.
             if keep, let c = chatId { await reloadAfterNoAnswer(c, g) }
+            // 503 бывает и «перегружен», и «выключен»: выключен ли — скажет status.
+            if e.status == 503 { await recheckOff(e.message, g) }
         } catch {
             guard g == gen else { return }
             sending = false
@@ -181,6 +215,17 @@ final class AssistantViewModel: ObservableObject {
             restore(q)
             sendError = error.localizedDescription
         }
+    }
+
+    /// Помощника выключили, пока чат открыт: текст сервера, поле ввода скрыто, входы скрыты.
+    private func recheckOff(_ message: String, _ g: Int) async {
+        guard let s = try? await API.shared.assistantStatus() else { return }
+        guard g == gen, !s.enabled else { return }
+        AssistantFeature.shared.hide()
+        status = s
+        offMessage = message
+        sendError = nil
+        noAnswer = false
     }
 
     /// После 502/504: перечитать переписку — сохранённый вопрос получит настоящий id.

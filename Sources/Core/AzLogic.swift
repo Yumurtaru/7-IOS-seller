@@ -99,6 +99,31 @@ enum Az {
         return mskCal.isDate(d, inSameDayAs: now) ? mskTime.string(from: d) : mskDayTime.string(from: d)
     }
 
+    /// П-68: подпись срока по until_ts (unix-секунды) в поясе ТЕЛЕФОНА: сегодня — «ЧЧ:ММ», иначе «ДД.ММ ЧЧ:ММ».
+    static func untilText(ts: Int, now: Date = Date()) -> String {
+        let d = Date(timeIntervalSince1970: TimeInterval(ts))
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.autoupdatingCurrent
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone.autoupdatingCurrent
+        f.dateFormat = cal.isDate(d, inSameDayAs: now) ? "HH:mm" : "dd.MM HH:mm"
+        return f.string(from: d)
+    }
+
+    /// П-68: момент окончания паузы — until_ts главнее московской строки; нет обоих — nil.
+    static func untilDate(_ s: String?, ts: Int?) -> Date? {
+        if let ts, ts > 0 { return Date(timeIntervalSince1970: TimeInterval(ts)) }
+        guard let s, !s.isEmpty else { return nil }
+        return DateFmt.parse(s)
+    }
+
+    /// Срок ещё впереди (по until_ts, а без него — по московской строке).
+    static func isUntilActive(_ s: String?, ts: Int?, now: Date = Date()) -> Bool {
+        guard let d = untilDate(s, ts: ts) else { return false }
+        return d > now
+    }
+
     /// Всегда «ДД.ММ ЧЧ:ММ» по МСК (метка разбора операции).
     static func dayTime(_ s: String?) -> String {
         guard let s, !s.isEmpty else { return "" }
@@ -121,13 +146,18 @@ enum Az {
 
     /// Заголовок карточки статуса: «На паузе до ЧЧ:ММ» (или «до ДД.ММ ЧЧ:ММ»); nil — срока нет
     /// (или он уже прошёл).
-    static func pauseTitle(until: String?) -> String? {
+    static func pauseTitle(until: String?, ts: Int? = nil) -> String? {
+        if let ts, ts > 0 {
+            guard isUntilActive(until, ts: ts) else { return nil }
+            return "На паузе до " + untilText(ts: ts)
+        }
         guard let u = activeUntil(until) else { return nil }
         return "На паузе до " + untilText(u)
     }
 
     /// Сообщение после успешной паузы.
-    static func pausedMessage(until: String?) -> String {
+    static func pausedMessage(until: String?, ts: Int? = nil) -> String {
+        if let ts, ts > 0 { return "Приём заказов на паузе до " + untilText(ts: ts) }
         if let u = until, !u.isEmpty { return "Приём заказов на паузе до " + untilText(u) }
         return "Приём заказов на паузе"
     }

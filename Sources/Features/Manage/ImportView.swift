@@ -233,8 +233,27 @@ struct ImportView: View {
     private var canRun: Bool { session.can("products.create") }
     @StateObject private var vm = ImportViewModel()
     @State private var picking = false
+    /// Есть ли на сервере «Импорт заданиями» (проверка «было → станет», пауза, откат). Нет — прежний экран как был.
+    @ObservedObject private var jobsFeature = ImportJobsFeature.shared
 
     var body: some View {
+        Group {
+            if jobsFeature.available {
+                ImportJobsView()
+            } else if jobsFeature.probing {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Brand.bg.ignoresSafeArea())
+            } else {
+                legacyBody
+            }
+        }
+        .navigationTitle("Импорт из файла")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: session.activeShopId) { await jobsFeature.refresh(shopId: session.activeShopId) }
+    }
+
+    private var legacyBody: some View {
         Form {
             if vm.applied != nil {
                 resultSection
@@ -254,8 +273,6 @@ struct ImportView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Brand.bg.ignoresSafeArea())
-        .navigationTitle("Импорт из файла")
-        .navigationBarTitleDisplayMode(.inline)
         // А60/П-23.6: ушли с экрана — опрос статуса не крутится в фоне.
         .onAppear { vm.screenAppeared() }
         .onDisappear { vm.stopPolling() }
