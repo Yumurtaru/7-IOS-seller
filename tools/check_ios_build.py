@@ -181,6 +181,35 @@ for f, text in code.items():
             add('СКОРОСТЬ', f, start + 1, f'склейка строк из {pluses + 1} частей через «+» — заменить интерполяцией')
         i += 1
 
+# 5) Свойства, изолированные главным потоком (@MainActor), из неизолированного
+#    контекста: Xcode 26 — ошибка «main actor-isolated class property … can not be
+#    referenced from a nonisolated context» (BarcodeScannerView.swift, сборка 5
+#    покупателя). Список — только API, на которых сборка реально падала.
+MAIN_ACTOR_API = re.compile(r'\bDataScannerViewController\.(?:isSupported|isAvailable)\b')
+MAIN_ACTOR_TYPE = re.compile(r'\b(?:struct|class)\s+\w+\s*:[^{]*\b(?:View|App|UIViewController|UIViewControllerRepresentable)\b')
+ANY_TYPE = re.compile(r'\b(?:enum|struct|class|extension|actor)\s+\w+')
+for f, text in code.items():
+    lines = text.split('\n')
+    for i, ln in enumerate(lines):
+        if not MAIN_ACTOR_API.search(ln):
+            continue
+        ind = len(ln) - len(ln.lstrip())
+        ok = False
+        for j in range(i - 1, -1, -1):
+            prev = lines[j]
+            pind = len(prev) - len(prev.lstrip())
+            if not prev.strip() or pind >= ind:
+                continue
+            ind = pind
+            here = prev + ' ' + (lines[j - 1] if j else '')
+            if '@MainActor' in here or MAIN_ACTOR_TYPE.search(prev):
+                ok = True
+                break
+            if ANY_TYPE.search(prev):
+                break
+        if not ok:
+            add('ПОТОК', f, i + 1, 'DataScannerViewController.isSupported/isAvailable — только в @MainActor (пометить член или тип)')
+
 out.sort(key=lambda p: (p[0], p[1], p[2]))
 for kind, f, line, msg in out:
     print(f'{kind:12} {f}:{line}  {msg}')
