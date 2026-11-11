@@ -64,9 +64,12 @@ enum Wholesale {
     }
 
     /// Метка списка товаров: «опт от 25 кг» (первая действующая ступень). Нет опта — nil.
+    /// П-70: единица не указана — без единицы («опт от 25»), как на сайте: пустая единица — не «шт».
     static func listLabel(tiers: [PriceTier]?, retail: Decimal?, unit: String?) -> String? {
         guard let first = eff(tiers, retail: retail).first, let q = first.minQty else { return nil }
-        return "опт от \(qtyText(q)) \(unitLabel(unit))"
+        let u = (unit ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if u.isEmpty { return "опт от \(qtyText(q))" }
+        return "опт от \(qtyText(q)) \(u)"
     }
 
     // ── Редактор ────────────────────────────────────────────────────────────
@@ -79,11 +82,18 @@ enum Wholesale {
             .map { Row(qty: $0.minQty.map(qtyText) ?? "", price: priceInput($0.price)) }
     }
 
-    /// Штучный: единица «шт» (или пусто) и нет признака дробного количества.
-    static func isPiece(unit: String?, fractional: Bool) -> Bool {
-        if fractional { return false }
-        let u = unitLabel(unit).lowercased().replacingOccurrences(of: ".", with: "")
-        return u == "шт" || u == "штука" || u == "штук"
+    /// Единицы, которые сервер считает дробными (регистр и точка в конце не важны).
+    private static let fractionalUnits: Set<String> = ["кг", "kg", "г", "g", "гр", "л", "l", "мл", "ml", "м", "m"]
+
+    /// Штучный ли товар — правило сервера (ответ на П-69): решает qty_fractional (товар, затем категория;
+    /// true — дробный, false — штучный); не задан нигде — по единице: кг/kg/г/g/гр/л/l/мл/ml/м/m — дробный,
+    /// всё остальное (в т.ч. пустая единица) — штучный. Так же на Android.
+    static func isPiece(unit: String?, fractional: Bool? = nil) -> Bool {
+        if let f = fractional { return !f }
+        var u = (unit ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while u.hasSuffix(".") { u.removeLast() }
+        u = u.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !fractionalUnits.contains(u)
     }
 
     private struct Parsed { var qty: Decimal?; var price: Decimal? }

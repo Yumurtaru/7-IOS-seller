@@ -41,7 +41,7 @@ struct LoginResponse: Decodable {
         } else {
             permissions = nil
         }
-        isOwner = try? c.decodeIfPresent(Bool.self, forKey: .isOwner)
+        isOwner = (try? c.decode(LenientBool.self, forKey: .isOwner))?.wrappedValue
         role = try? c.decodeIfPresent(SellerRoleBrief.self, forKey: .role)
         hasEmployee = c.contains(.employee)
     }
@@ -110,7 +110,7 @@ struct MeResponse: Decodable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         user = try? c.decodeIfPresent(SellerUser.self, forKey: .user)
-        isOwner = (try? c.decodeIfPresent(Bool.self, forKey: .isOwner)) as? Bool ?? true
+        isOwner = (try? c.decode(LenientBool.self, forKey: .isOwner))?.wrappedValue ?? true
         // PHP отдаёт объект прав, но пустой массив кодируется как [] —
         // не роняем весь ответ из-за этого, как и в LoginResponse.
         if let map = try? c.decodeIfPresent([String: Bool].self, forKey: .permissions) {
@@ -462,6 +462,10 @@ struct OrderDetail: Decodable {
     var addressDetails: OrderAddress?
     /// Назначенный курьер (orders.courier_id из SELECT o.*); 0/null — не назначен.
     @LenientInt var courierId: Int?
+    /// Наличные у курьера (orders.courier_cash_*): awaiting - долг открыт; нужны, чтобы при отмене
+    /// предложить «курьер денег не брал». Старый сервер не шлёт - nil.
+    @LenientString var courierCashStatus: String?
+    @LenientDecimal var courierCashTaken: Decimal?
     /// П-26.7: подпись статуса и весь словарь статусов этого заказа от сервера
     /// (с учётом типа организации, самовывоза/зала и брони). Нет полей — пусто.
     @LenientString var statusTitle: String?
@@ -480,6 +484,8 @@ struct OrderDetail: Decodable {
         case statusTitle = "status_title"
         case statusTitles = "status_titles"
         case courierId = "courier_id"
+        case courierCashStatus = "courier_cash_status"
+        case courierCashTaken = "courier_cash_taken"
         case addressText = "address_text"
         case addressDetails = "address_details"
         case clientComment = "client_comment"
@@ -830,7 +836,8 @@ struct ProductDetail: Decodable {
     /// Маркированный товар (Честный ЗНАК). Касса по этому признаку требует скан
     /// DataMatrix перед добавлением в чек и передаёт код в ОФД.
     @LenientBool var isMarked: Bool?
-    @LenientInt var qtyFractional: Int?
+    // Сервер шлёт 0/1 (справка: целое), в части ответов — логическое: @LenientBool понимает оба.
+    @LenientBool var qtyFractional: Bool?
     @LenientDecimal var qtyStep: Decimal?
     var qtyPresets: String?
     var photos: [ProductPhoto]?
@@ -881,6 +888,9 @@ struct SellerCategory: Decodable, Identifiable, Hashable {
     @LenientBool var isActive: Bool?
     @LenientInt var sortOrder: Int?
     var stationRoute: String?
+    /// 1 — дробное количество, 0 — штучный, nil — не задано (нужно для проверки оптовых ступеней).
+    // Сервер шлёт 0/1 (справка: целое), в части ответов — логическое: @LenientBool понимает оба.
+    @LenientBool var qtyFractional: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, slug, image
@@ -888,6 +898,7 @@ struct SellerCategory: Decodable, Identifiable, Hashable {
         case isActive = "is_active"
         case sortOrder = "sort_order"
         case stationRoute = "station_route"
+        case qtyFractional = "qty_fractional"
     }
     var categoryId: Int { id ?? 0 }
 }

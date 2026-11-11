@@ -97,8 +97,12 @@ extension API {
         try await post("api/seller/orders/\(id)/status", body: ["status": status], as: StatusAck.self)
     }
 
-    func cancelOrder(id: Int, reason: String) async throws -> BoolAck {
-        try await post("api/seller/orders/\(id)/cancel", body: ["reason": reason], as: BoolAck.self)
+    /// cashRefused (сайт А919, К-35 п.2): курьер денег не брал (отказ у двери / не довёз) -
+    /// сервер снимает долг по наличным и отменяет. Без флага ключ не уходит.
+    func cancelOrder(id: Int, reason: String, cashRefused: Bool = false) async throws -> BoolAck {
+        var body: [String: Any?] = ["reason": reason]
+        if cashRefused { body["courier_cash_refused"] = true }
+        return try await post("api/seller/orders/\(id)/cancel", body: body, as: BoolAck.self)
     }
 
     /// Правка состава заказа: шлём ТОЛЬКО изменённые строки, суммы считает сервер.

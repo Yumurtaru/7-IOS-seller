@@ -23,7 +23,7 @@ enum StationPerms {
     static let byType: [String: [String]] = [
         "kiosk": ["sell", "pay_cash", "pay_card", "reprint", "refund", "cancel_order",
                   "discount", "open_drawer", "x_report", "z_report", "price_override", "cook_unpaid",
-                  "edit_order"],
+                  "edit_order", "points_phone"],   // points_phone — К-51 (А1106), как на сервере
         "kitchen": ["view_orders", "mark_ready", "stop_list"],
         "bar": ["view_orders", "mark_ready", "stop_list"],
         "picker": ["view_orders", "mark_collected", "report_shortage", "edit_order"],
@@ -36,7 +36,8 @@ enum StationPerms {
         "reprint": "Повтор чека", "refund": "Возврат", "cancel_order": "Отмена заказа",
         "discount": "Скидки", "open_drawer": "Открыть денежный ящик", "x_report": "X-отчёт",
         "z_report": "Z-отчёт (закрытие смены)", "price_override": "Изменение цены",
-        "cook_unpaid": "Готовить без оплаты", "view_orders": "Просмотр заказов",
+        "cook_unpaid": "Готовить без оплаты", "points_phone": "Баллы по телефону без карты (без PIN старшего)",
+        "view_orders": "Просмотр заказов",
         "mark_ready": "Отметка готовности", "stop_list": "Стоп-лист",
         "mark_collected": "Отметка сборки",
         "report_shortage": "Сообщить о недостаче",

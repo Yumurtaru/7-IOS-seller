@@ -349,6 +349,8 @@ struct ProductsView: View {
     /// Массовое удаление — только после вопроса: пункт меню удалял выбранные
     /// товары сразу, одним касанием (а одиночное удаление спрашивает).
     @State private var confirmBulkDelete = false
+    /// Массовая правка (волна М1): id выбранных на момент открытия; nil — экран закрыт.
+    @State private var bulkEditIds: [Int]?
 
     var body: some View {
         NavigationStack {
@@ -423,6 +425,16 @@ struct ProductsView: View {
                 }
             }
             .navigationDestination(isPresented: $showStopList) { StopListView() }
+            .navigationDestination(isPresented: Binding(
+                get: { bulkEditIds != nil },
+                set: { if !$0 { bulkEditIds = nil } }
+            )) {
+                BulkEditView(ids: bulkEditIds ?? [], categories: vm.categories, onChanged: {
+                    vm.selecting = false
+                    vm.selected = []
+                    Task { await vm.reload() }
+                })
+            }
             .navigationDestination(isPresented: Binding(
                 get: { openedProduct != nil },
                 set: { if !$0 { openedProduct = nil } }
@@ -729,6 +741,8 @@ struct ProductsView: View {
             // (seller_products.php, «Создавать товары» не нужно), удаление —
             // ещё и products.delete.
             if canBulk {
+                Button("Изменить…") { bulkEditIds = vm.selected.sorted() }
+                    .disabled(vm.selected.isEmpty)
                 Menu("Действия") {
                     if canBulk {
                         Button("Показать") { Task { await vm.bulk(action: "status", value: "active") } }

@@ -117,8 +117,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
-        Task { @MainActor in DeepLinkRouter.shared.handlePush(userInfo: info) }
+        // E1: пуш «Вышла новая версия» (type = app_update) — по нажатию открываем ссылку на магазин.
+        if let storeURL = Self.appUpdateURL(info) {
+            Task { @MainActor in UIApplication.shared.open(storeURL) }
+        } else {
+            Task { @MainActor in DeepLinkRouter.shared.handlePush(userInfo: info) }
+        }
         completionHandler()
+    }
+
+    /// Ссылка из пуша app_update: только http/https. Другой тип или ссылка негодна — nil (обычное поведение).
+    nonisolated static func appUpdateURL(_ info: [AnyHashable: Any]) -> URL? {
+        guard (info["type"] as? String) == "app_update",
+              let raw = (info["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else { return nil }
+        return url
     }
 
     /// Тихий/фоновый data-push — подтверждаем и обновляем счётчик заказов.

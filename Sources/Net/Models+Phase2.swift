@@ -663,9 +663,15 @@ struct ForecastRow: Decodable, Identifiable {
     @LenientDecimal var forecast1Qty: Decimal?
     @LenientDecimal var stockQty: Decimal?
     @LenientDecimal var toBuy: Decimal?
+    /// А320: точные количества для весового товара (целые sold_7/forecast_7 округляют 0,4 кг до 0) и единица.
+    @LenientDecimal var sold7Qty: Decimal?
+    @LenientDecimal var forecast7Qty: Decimal?
+    var unit: String?
 
     enum CodingKeys: String, CodingKey {
-        case name
+        case name, unit
+        case sold7Qty = "sold_7_qty"
+        case forecast7Qty = "forecast_7_qty"
         case productId = "product_id"
         case sold7 = "sold_7"
         case soldPrev7 = "sold_prev7"

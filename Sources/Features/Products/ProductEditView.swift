@@ -63,8 +63,10 @@ final class ProductEditViewModel: ObservableObject {
     private var tiersTouched = false
     /// Сервер прислал price_tiers у товара (новый сервер) — ключ уходит всегда.
     private var serverSentTiers = false
-    /// Признак дробного количества у товара (штучный = нет признака и единица «шт»).
-    private var qtyFractional = false
+    /// qty_fractional товара: true — дробный, false — штучный, nil — не задан (решает категория, затем единица).
+    private var qtyFractional: Bool?
+    /// qty_fractional категорий по id (заполняет экран; только заданные значения).
+    var categoryFractional: [Int: Bool] = [:]
 
     @Published var state: LoadState = .idle
     @Published var error: String?
@@ -221,7 +223,7 @@ final class ProductEditViewModel: ObservableObject {
             isMarked = p.isMarked ?? false
             photos = p.photos ?? []
             serverSentTiers = p.priceTiers != nil
-            qtyFractional = (p.qtyFractional ?? 0) == 1
+            qtyFractional = p.qtyFractional
             tierRows = Wholesale.rows(from: p.priceTiers)
             tiersTouched = false
             tiersError = nil
@@ -315,8 +317,10 @@ final class ProductEditViewModel: ObservableObject {
         // O1: оптовые ступени. Право «Цены» — как у поля цены: без него ключ не шлём.
         var tiersBody: [[String: Any]]?
         if Session.shared.can("products.price") && (serverSentTiers || tiersTouched) {
-            if let msg = Wholesale.validate(rows: tierRows, retail: priceNum,
-                                            piece: Wholesale.isPiece(unit: unit, fractional: qtyFractional)) {
+            var catFrac: Bool?
+            if let cid = categoryId { catFrac = categoryFractional[cid] }
+            let pieceItem = Wholesale.isPiece(unit: unit, fractional: qtyFractional ?? catFrac)
+            if let msg = Wholesale.validate(rows: tierRows, retail: priceNum, piece: pieceItem) {
                 tiersError = msg
                 return false
             }
@@ -889,13 +893,24 @@ struct ProductEditView: View {
         .task {
             // Без проверки state != .loading: прерванная загрузка могла ещё не
             // вернуть CancellationError — тогда новую пропускали, и форма оставалась пустой.
+            vm.categoryFractional = Self.fractionalMap(categories)
             if !vm.loadedOnce { await vm.load() }
             // Список категорий не загрузился на экране товаров — грузим сами:
             // иначе у нового товара в выборе было только «Без категории».
             if categories.isEmpty && fetchedCategories.isEmpty {
                 fetchedCategories = (try? await API.shared.categories()) ?? []
+                vm.categoryFractional = Self.fractionalMap(fetchedCategories)
             }
         }
+    }
+
+    /// id категории → qty_fractional (только где задан).
+    private static func fractionalMap(_ cs: [SellerCategory]) -> [Int: Bool] {
+        var m: [Int: Bool] = [:]
+        for c in cs {
+            if let f = c.qtyFractional { m[c.categoryId] = f }
+        }
+        return m
     }
 
     /// Цену правит только тот, у кого есть право «Цены». У нового товара цена

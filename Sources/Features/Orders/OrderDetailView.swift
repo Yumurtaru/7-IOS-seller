@@ -99,13 +99,13 @@ final class OrderDetailViewModel: ObservableObject {
         }
     }
 
-    func cancel(reason: String) async -> Bool {
+    func cancel(reason: String, cashRefused: Bool = false) async -> Bool {
         guard !isActing else { return false }
         isActing = true
         actionError = nil
         defer { isActing = false }
         do {
-            _ = try await API.shared.cancelOrder(id: orderId, reason: reason)
+            _ = try await API.shared.cancelOrder(id: orderId, reason: reason, cashRefused: cashRefused)
             await load()
             await NewOrderPoller.shared.tick()   // отменённый новый — тоже не «новый» (см. setStatus)
             return true
@@ -119,6 +119,11 @@ final class OrderDetailViewModel: ObservableObject {
 
 struct OrderDetailView: View {
     @StateObject private var vm: OrderDetailViewModel
+    /// Наличные у курьера не получены (отказ у двери / не довёз): можно отменить с отметкой.
+    private var cashRefusable: Bool {
+        guard let o = vm.order else { return false }
+        return o.courierCashStatus == "awaiting" && (o.courierCashTaken ?? 0) <= 0
+    }
     @State private var showCancelDialog = false
     @State private var showEditSheet = false
     @State private var cancelReason = ""
@@ -218,6 +223,19 @@ struct OrderDetailView: View {
                     if await vm.cancel(reason: r) {
                         cancelReason = ""
                         onChanged?()
+                    }
+                }
+            }
+            // Долг по наличным открыт, но курьер денег не брал: без отметки сервер не даёт отменить.
+            if cashRefusable {
+                Button("Отменить: курьер деньги не брал", role: .destructive) {
+                    let r = cancelReason.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !r.isEmpty else { vm.actionError = "Укажите причину отмены"; return }
+                    Task {
+                        if await vm.cancel(reason: r, cashRefused: true) {
+                            cancelReason = ""
+                            onChanged?()
+                        }
                     }
                 }
             }

@@ -43,11 +43,11 @@ struct ForecastView: View {
                                 .foregroundColor(Brand.text)
                                 .lineLimit(1)
                             Spacer()
-                            StatusBadge(text: "≈ \(row.forecast7 ?? 0) шт",
+                            StatusBadge(text: "≈ \(row.forecast7Qty.map { QtyFmt.qty($0) } ?? String(row.forecast7 ?? 0)) \(row.unit ?? "шт")",
                                         color: Brand.accent)
                         }
                         HStack(spacing: 10) {
-                            Text("за 7 дн: \(row.sold7 ?? 0)")
+                            Text("за 7 дн: \(row.sold7Qty.map { QtyFmt.qty($0) } ?? String(row.sold7 ?? 0))")
                             Text("до этого: \(row.soldPrev7 ?? 0)")
                             trendBadge(row.trendPct ?? 0)
                         }
