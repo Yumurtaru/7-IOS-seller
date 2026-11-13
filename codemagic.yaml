@@ -148,6 +148,18 @@ definitions:
         else
           echo "App Store: номер не получил — $(head -c 200 /tmp/asc_bn_err.txt | tr '\n' ' ')"
         fi
+        # Apple не назвал последний номер сборки — не собираем вслепую: номер из счётчика
+        # Codemagic ниже уже загруженных, и Apple отклонит его только в самом конце, после
+        # сборки (13.11.2026 у покупателя ушла сборка 11 при загруженной 87). Стоп сразу.
+        if [ "$LAST" -eq 0 ]; then
+          echo "─────────────────────────────────────────"
+          echo "  ОШИБКА: App Store Connect не назвал последний номер сборки."
+          echo "  Ответ Apple: $(head -c 300 /tmp/asc_bn_err.txt 2>/dev/null | tr '\n' ' ')"
+          echo "  Проверьте ключ интеграции yumurta_asc (Codemagic → Teams → Integrations):"
+          echo "  ключ не отозван в App Store Connect и имеет роль App Manager или Admin."
+          echo "─────────────────────────────────────────"
+          exit 1
+        fi
         if [ "$LAST" -ge "$NUM" ]; then NUM=$((LAST + 1)); fi
         echo "Счётчик Codemagic: ${BUILD_NUMBER:-нет}; последняя сборка у Apple: $LAST; номер сборки: $NUM"
 
@@ -501,6 +513,12 @@ definitions:
       app_store_connect: yumurta_asc
     environment:
       xcode: latest
+      vars:
+        # Xcode 26: новый altool не всегда находит приложение по Bundle ID, если у
+        # аккаунта несколько провайдеров (команд), и загрузка падает с ошибкой
+        # «Cannot determine the Apple ID from Bundle ID … (19)» (13.11.2026, сборка 11).
+        # Решение из справки Codemagic: передать номер приложения в App Store Connect.
+        APP_STORE_CONNECT_ALTOOL_ADDITIONAL_ARGUMENTS: "--apple-id 6809221577"
       ios_signing:
         # Подпись ровно как в клиентском приложении: сертификат и профили
         # лежат в Codemagic под именами, а он сам ставит их в keychain
