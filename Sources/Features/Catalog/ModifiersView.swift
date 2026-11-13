@@ -47,6 +47,8 @@ final class ModifiersViewModel: ObservableObject {
     }
 
     func deleteGroup(_ g: ModifierGroup) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
         do { try await API.shared.deleteModifierGroup(id: g.groupId); await load() }
         catch { self.error = error.localizedDescription }
     }
@@ -62,6 +64,8 @@ final class ModifiersViewModel: ObservableObject {
     }
 
     func deleteOption(_ o: ModifierOption) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
         do { try await API.shared.deleteModifierOption(id: o.optionId); await load() }
         catch { self.error = error.localizedDescription }
     }

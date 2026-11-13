@@ -286,7 +286,7 @@ enum TrendLogic {
         let was = "было " + format(previous)
         guard previous > 0 else { return (was, nil) }
         let ratio = NSDecimalNumber(decimal: (current - previous) / previous * 100).doubleValue
-        guard ratio.isFinite else { return (was, nil) }
+        guard ratio.isFinite, abs(ratio) < 1e12 else { return (was, nil) }
         let pct = Int(abs(ratio).rounded())
         guard pct != 0 else { return (was, nil) }
         return ratio > 0 ? ("▲ \(pct)% · " + was, true) : ("▼ \(pct)% · " + was, false)

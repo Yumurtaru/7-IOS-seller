@@ -96,7 +96,7 @@ struct ShopStatusControl: View {
                 await session.refreshPause()
                 return
             }
-            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(min(wait, 86_400) * 1_000_000_000))
             if Task.isCancelled { return }
             await session.refreshPause()
         }

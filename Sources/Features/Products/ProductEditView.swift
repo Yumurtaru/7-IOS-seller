@@ -450,6 +450,7 @@ final class ProductEditViewModel: ObservableObject {
             return
         }
         guard photos.count < 5 else { error = "Максимум 5 фото"; return }
+        guard !isUploading else { return }   // два снимка подряд: лимит 5 проверялся до ответа первого
         isUploading = true
         error = nil
         defer { isUploading = false }

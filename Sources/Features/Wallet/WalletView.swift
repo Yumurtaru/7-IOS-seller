@@ -460,7 +460,7 @@ struct WalletView: View {
         var text = "В среднем списывается \(Money.rub(avg)) в день"
         if let b = balance, b > 0 {
             let days = NSDecimalNumber(decimal: b / avg).doubleValue
-            if days.isFinite {
+            if days.isFinite, days < 1e12 {
                 let n = Int(days.rounded(.down))
                 text += n < 1 ? " · хватит меньше чем на день" : " · хватит примерно на \(n) дн."
             }

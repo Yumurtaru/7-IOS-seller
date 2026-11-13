@@ -133,6 +133,8 @@ final class CategoriesViewModel: ObservableObject {
     }
 
     func delete(_ c: ProductCategory) async {
+        guard !busy else { return }   // второе «Удалить» после успешного давало ошибку «не найдена»
+        busy = true; defer { busy = false }
         do {
             try await API.shared.deleteCategory(id: c.categoryId)
             await load()

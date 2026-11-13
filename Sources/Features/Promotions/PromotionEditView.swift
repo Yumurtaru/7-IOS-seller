@@ -52,7 +52,7 @@ struct EditablePromoPart: Identifiable {
             } else if let i = Int(v.filter { !$0.isWhitespace }) {
                 out[key] = i
             } else if let d = Money.strict(v, maxFraction: 4) {
-                out[key] = NSDecimalNumber(decimal: d).doubleValue
+                out[key] = NSDecimalNumber(decimal: d)   // точная десятичная запись в JSON, без 0.1+0.2-артефактов
             } else {
                 out[key] = v
             }

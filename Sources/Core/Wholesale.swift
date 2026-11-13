@@ -144,8 +144,8 @@ enum Wholesale {
         let out: [(Double, [String: Any])] = parsed(rows).compactMap { it in
             guard let q = it.qty, let p = it.price else { return nil }
             let price = moneyFormatter.string(from: NSDecimalNumber(decimal: p)) ?? "\(p)"
-            let qd = NSDecimalNumber(decimal: q).doubleValue
-            return (qd, ["min_qty": qd, "price": price])
+            let qd = NSDecimalNumber(decimal: q).doubleValue   // только для сортировки
+            return (qd, ["min_qty": NSDecimalNumber(decimal: q), "price": price])
         }
         return out.sorted { $0.0 < $1.0 }.map { $0.1 }
     }
