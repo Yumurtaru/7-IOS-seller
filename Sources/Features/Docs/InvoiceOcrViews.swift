@@ -81,13 +81,15 @@ struct MultiPhotoLibraryPicker: UIViewControllerRepresentable {
     nonisolated static func loadJpeg(_ provider: NSItemProvider) -> Data? {
         guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else { return nil }
         let sem = DispatchSemaphore(value: 0)
-        var result: Data?
+        // Коробка вместо var: колбэк системы @Sendable и не может менять захваченную переменную.
+        final class Box: @unchecked Sendable { var data: Data? }
+        let box = Box()
         provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
-            if let url { result = jpegThumbnail(from: url) }
+            if let url { box.data = jpegThumbnail(from: url) }
             sem.signal()
         }
         sem.wait()
-        return result
+        return box.data
     }
 
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
@@ -108,14 +110,15 @@ struct MultiPhotoLibraryPicker: UIViewControllerRepresentable {
                 for p in providers {
                     if let d = MultiPhotoLibraryPicker.loadJpeg(p), !d.isEmpty { datas.append(d) }
                 }
+                let ready = datas
                 DispatchQueue.main.async {
-                    if datas.isEmpty {
+                    if ready.isEmpty {
                         fail?("Не удалось открыть фото. Если оно в iCloud — дождитесь загрузки на телефон и выберите снова.")
                     } else {
-                        if datas.count < providers.count {
+                        if ready.count < providers.count {
                             fail?("Часть фото не открылась — добавьте их ещё раз.")
                         }
-                        pick(datas, providers.count)
+                        pick(ready, providers.count)
                     }
                 }
             }

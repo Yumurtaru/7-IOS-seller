@@ -421,9 +421,9 @@ struct LoyaltyProgram: Decodable {
     @LenientDecimal var pointsRedeemMaxPercentEffective: Decimal?
     @LenientDecimal var pointsRedeemMinOrder: Decimal?
     /// Разбираются, но правятся только в кабинете на сайте.
-    var categoryRules: [LoyaltyCategoryRule]?
-    var excludedProductIds: [LenientInt]?
-    var restricted: [LoyaltyRestrictedItem]?
+    @TolerantList var categoryRules: [LoyaltyCategoryRule]?
+    @TolerantList var excludedProductIds: [LenientInt]?
+    @TolerantList var restricted: [LoyaltyRestrictedItem]?
 
     enum CodingKeys: String, CodingKey {
         case cashbackPercent = "cashback_percent"

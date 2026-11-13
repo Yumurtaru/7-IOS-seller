@@ -357,6 +357,7 @@ enum BulkEditLogic {
         case "retail_price_manual": return d != 0 ? "вручную" : "авто"
         case "qty_fractional": return d != 0 ? "дробное" : "целое"
         case "category_id":
+            guard d.isFinite, abs(d) < 1e15 else { return plain(d) }
             let id = Int(d)
             return categoryName(id) ?? "№\(id)"
         default: return plain(d)

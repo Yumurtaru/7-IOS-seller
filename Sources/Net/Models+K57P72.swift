@@ -116,3 +116,19 @@ enum Substitution {
         ["completed", "delivered", "cancelled", "refunded", "rejected"].contains(status ?? "")
     }
 }
+
+/// Массив, который не роняет разбор родителя: не массив / мусор внутри -> nil.
+@propertyWrapper
+struct TolerantList<T: Decodable>: Decodable {
+    var wrappedValue: [T]?
+    init(wrappedValue: [T]?) { self.wrappedValue = wrappedValue }
+    init(from decoder: Decoder) throws {
+        wrappedValue = try? decoder.singleValueContainer().decode([T].self)
+    }
+}
+
+extension KeyedDecodingContainer {
+    func decode<T: Decodable>(_ type: TolerantList<T>.Type, forKey key: Key) throws -> TolerantList<T> {
+        (try? decodeIfPresent(type, forKey: key)) ?? TolerantList<T>(wrappedValue: nil)
+    }
+}
