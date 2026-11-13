@@ -408,12 +408,40 @@ struct LoyaltyProgram: Decodable {
     @LenientDecimal var minOrderForCashback: Decimal?
     @LenientInt var pointsExpireDays: Int?
     @LenientBool var isActive: Bool?
+    // К-57 (все поля необязательные — старый сервер их не шлёт).
+    /// "cashback" | "discount".
+    var mode: String?
+    @LenientBool var onPromoItems: Bool?
+    @LenientBool var usePlatformTiers: Bool?
+    @LenientBool var cardSpendVerifiedOnly: Bool?
+    @LenientInt var earnDelayDays: Int?
+    @LenientInt var systemRestrictedCount: Int?
+    @LenientInt var expireWarnDays: Int?
+    @LenientDecimal var pointsRedeemMaxPercent: Decimal?
+    @LenientDecimal var pointsRedeemMaxPercentEffective: Decimal?
+    @LenientDecimal var pointsRedeemMinOrder: Decimal?
+    /// Разбираются, но правятся только в кабинете на сайте.
+    var categoryRules: [LoyaltyCategoryRule]?
+    var excludedProductIds: [LenientInt]?
+    var restricted: [LoyaltyRestrictedItem]?
 
     enum CodingKeys: String, CodingKey {
         case cashbackPercent = "cashback_percent"
         case minOrderForCashback = "min_order_for_cashback"
         case pointsExpireDays = "points_expire_days"
         case isActive = "is_active"
+        case mode, restricted
+        case onPromoItems = "on_promo_items"
+        case usePlatformTiers = "use_platform_tiers"
+        case cardSpendVerifiedOnly = "card_spend_verified_only"
+        case earnDelayDays = "earn_delay_days"
+        case systemRestrictedCount = "system_restricted_count"
+        case expireWarnDays = "expire_warn_days"
+        case pointsRedeemMaxPercent = "points_redeem_max_percent"
+        case pointsRedeemMaxPercentEffective = "points_redeem_max_percent_effective"
+        case pointsRedeemMinOrder = "points_redeem_min_order"
+        case categoryRules = "category_rules"
+        case excludedProductIds = "excluded_product_ids"
     }
 }
 

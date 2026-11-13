@@ -571,6 +571,33 @@ extension API {
                            as: Phase2BoolAck.self)
     }
 
+    /// К-57: PUT пишет только присланные поля (mode, card_spend_verified_only, points_redeem_max_percent…).
+    /// Проценты — строкой, как в saveLoyalty. 422 — текст сервера в localizedDescription.
+    func patchLoyalty(_ fields: [String: Any?]) async throws {
+        _ = try await put("api/seller/loyalty", body: fields, as: Phase2BoolAck.self)
+    }
+
+    // ── Замены товаров (П-72 п.4) ────────────────────────────────────────────
+    /// qty — строкой (вес — три знака); nil — ключ не уходит, сервер берёт количество строки.
+    /// Отказ с HTTP-статусом (APIDetailedError): 409 — клиент уже ответил.
+    func proposeSubstitute(orderId: Int, itemId: Int, productId: Int, qty: Decimal?) async throws {
+        var body: [String: Any?] = ["product_id": productId]
+        if let q = qty { body["qty"] = "\(q)" }
+        _ = try await postDetailed("api/seller/orders/\(orderId)/items/\(itemId)/substitute", body: body, as: BoolAck.self)
+    }
+
+    func revokeSubstitute(orderId: Int, itemId: Int) async throws {
+        _ = try await delete("api/seller/orders/\(orderId)/items/\(itemId)/substitute", as: BoolAck.self)
+    }
+
+    func substitutionSettings() async throws -> SubstitutionSettings {
+        try await get("api/seller/substitution/settings", as: SubstitutionSettings.self)
+    }
+
+    func saveSubstitutionSettings(timeoutMin: Int) async throws {
+        _ = try await post("api/seller/substitution/settings", body: ["timeout_min": timeoutMin], as: BoolAck.self)
+    }
+
     // ── Сотрудники / роли / смены (routes/seller_staff.php) ──────────────────
     func staffPermissions() async throws -> StaffPermissionsInfo {
         try await get("api/seller/staff/permissions", as: StaffPermissionsInfo.self)

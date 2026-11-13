@@ -476,8 +476,13 @@ struct OrderDetail: Decodable {
     /// карточку не роняет (PoolCallBox разбирает мягко).
     var poolCall: PoolCallBox?
     @LenientBool var poolCallAvailable: Bool?
+    /// П-72 п.4: выбор клиента по умолчанию (similar|call|remove) и срок ответа. Старый сервер — nil.
+    var substitutionDefault: String?
+    var substitutionDeadlineAt: String?
 
     enum CodingKeys: String, CodingKey {
+        case substitutionDefault = "substitution_default"
+        case substitutionDeadlineAt = "substitution_deadline_at"
         case id, status, subtotal, discount, total, comment, client, address, items, log, rev, changes, lodging, tip
         case poolCall = "pool_call"
         case poolCallAvailable = "pool_call_available"
@@ -677,9 +682,12 @@ struct OrderItem: Decodable, Identifiable {
     /// Сколько заказывал КЛИЕНТ. Отличается от qty, если состав правили.
     @LenientDecimal var qtyOrdered: Decimal?
     var modifiersJson: String?
+    /// П-72 п.4: выбор клиента «если нет» (similar|call|remove) и предложенная замена.
+    var substitution: String?
+    var substitute: SubstituteInfo?
 
     enum CodingKeys: String, CodingKey {
-        case name, price, qty, unit
+        case name, price, qty, unit, substitution, substitute
         case lineId = "id"
         case productId = "product_id"
         case qtyOrdered = "qty_ordered"

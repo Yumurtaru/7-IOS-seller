@@ -99,6 +99,41 @@ final class OrderDetailViewModel: ObservableObject {
         }
     }
 
+    /// П-72 п.4: предложить замену. 409 — клиент уже ответил; любая ошибка кончается
+    /// перечитыванием заказа. 422 (foreign_product, товар недоступен, заказ уже собран) — текст сервера.
+    func proposeSubstitute(itemId: Int, productId: Int, qty: Decimal?) async -> Bool {
+        guard !isActing else { return false }
+        isActing = true
+        actionError = nil
+        defer { isActing = false }
+        do {
+            try await API.shared.proposeSubstitute(orderId: orderId, itemId: itemId, productId: productId, qty: qty)
+            await load()
+            return true
+        } catch {
+            if let e = error as? APIDetailedError, e.status == 409 {
+                actionError = "Клиент уже ответил — данные обновлены"
+            } else {
+                actionError = error.localizedDescription
+            }
+            await load()
+            return false
+        }
+    }
+
+    func revokeSubstitute(itemId: Int) async {
+        guard !isActing else { return }
+        isActing = true
+        actionError = nil
+        defer { isActing = false }
+        do {
+            try await API.shared.revokeSubstitute(orderId: orderId, itemId: itemId)
+        } catch {
+            actionError = error.localizedDescription
+        }
+        await load()
+    }
+
     func cancel(reason: String, cashRefused: Bool = false) async -> Bool {
         guard !isActing else { return false }
         isActing = true
@@ -495,6 +530,16 @@ struct OrderDetailView: View {
                             .font(.caption)
                             .foregroundColor(Brand.muted)
                     }
+                    // П-72 п.4: выбор клиента, замена и её статус под позицией.
+                    SubstitutionItemRow(
+                        item: item,
+                        orderStatus: o.status,
+                        clientPhone: o.clientPhone,
+                        canAct: Session.shared.can("orders"),
+                        busy: vm.isActing,
+                        onPropose: { itemId, productId, qty in await vm.proposeSubstitute(itemId: itemId, productId: productId, qty: qty) },
+                        onRevoke: { itemId in await vm.revokeSubstitute(itemId: itemId) }
+                    )
                 }
                 .padding(.vertical, 3)
             }

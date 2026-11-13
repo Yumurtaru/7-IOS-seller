@@ -315,6 +315,7 @@ struct ShopSettingsView: View {
             } header: { Text("Приём заказов") }
             .listRowBackground(Brand.card)
             returnsSection
+            SubstitutionSettingsSection()
             notificationsSection
             feedbackSection
         }
