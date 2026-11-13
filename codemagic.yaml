@@ -155,8 +155,15 @@ definitions:
           echo "─────────────────────────────────────────"
           echo "  ОШИБКА: App Store Connect не назвал последний номер сборки."
           echo "  Ответ Apple: $(head -c 300 /tmp/asc_bn_err.txt 2>/dev/null | tr '\n' ' ')"
-          echo "  Проверьте ключ интеграции yumurta_asc (Codemagic → Teams → Integrations):"
-          echo "  ключ не отозван в App Store Connect и имеет роль App Manager или Admin."
+          if grep -qi "agreement" /tmp/asc_bn_err.txt 2>/dev/null; then
+            echo "  ПРИЧИНА: не принято обновлённое соглашение Apple (403 REQUIRED_AGREEMENTS)."
+            echo "  Владелец аккаунта (Account Holder): appstoreconnect.apple.com - жёлтый баннер"
+            echo "  на главной и раздел Business (Бизнес) - принять все соглашения не в статусе Active."
+            echo "  Через несколько минут после принятия перезапустить сборку."
+          else
+            echo "  Проверьте ключ интеграции yumurta_asc (Codemagic → Teams → Integrations):"
+            echo "  ключ не отозван в App Store Connect и имеет роль App Manager или Admin."
+          fi
           echo "─────────────────────────────────────────"
           exit 1
         fi
