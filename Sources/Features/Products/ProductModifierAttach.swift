@@ -11,8 +11,10 @@ import SwiftUI
 // ============================================================================
 
 extension ProductEditViewModel {
-    private func reloadProductModifiers(_ id: Int) async {
-        if let fresh = try? await API.shared.productModifiers(productId: id) { modifierGroups = fresh }
+    /// false - перечитать не удалось (список на экране мог устареть).
+    private func reloadProductModifiers(_ id: Int) async -> Bool {
+        if let fresh = try? await API.shared.productModifiers(productId: id) { modifierGroups = fresh; return true }
+        return false
     }
 
     func attachModifierGroup(_ g: ModifierGroup) async -> Bool {
@@ -21,8 +23,10 @@ extension ProductEditViewModel {
         modNotice = nil
         do {
             try await API.shared.attachModifierGroup(productId: id, groupId: g.groupId)
-            await reloadProductModifiers(id)
-            modNotice = "Группа «\(g.name ?? "Группа")» добавлена к товару"
+            let fresh = await reloadProductModifiers(id)
+            modNotice = fresh
+                ? "Группа «\(g.name ?? "Группа")» добавлена к товару"
+                : "Группа добавлена, но список не обновился — откройте товар заново"
             return true
         } catch is CancellationError {
             return false
@@ -38,7 +42,9 @@ extension ProductEditViewModel {
         modNotice = nil
         do {
             try await API.shared.detachModifierGroup(productId: id, groupId: g.groupId)
-            await reloadProductModifiers(id)
+            if await !reloadProductModifiers(id) {
+                modNotice = "Группа отвязана, но список не обновился — откройте товар заново"
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -168,7 +174,7 @@ private struct ProductModifierAttachSheet: View {
         .scrollContentBackground(.hidden)
         .background(Brand.bg.ignoresSafeArea())
         .task { if state != .loaded { await load() } }
-        .listState(state, isEmpty: state == .loaded && available.isEmpty,
+        .listState(state, isEmpty: available.isEmpty,
                    emptyIcon: "slider.horizontal.3", emptyTitle: "Других групп нет — создайте новую",
                    retry: { Task { await load() } })
     }
