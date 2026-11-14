@@ -696,8 +696,8 @@ struct ProductEditView: View {
                     }
                     Picker("Категория", selection: $vm.categoryId) {
                         Text("Без категории").tag(Int?.none)
-                        ForEach(categories.isEmpty ? fetchedCategories : categories) { c in
-                            Text(c.name ?? "—").tag(Int?.some(c.categoryId))
+                        ForEach(categories.isEmpty ? fetchedCategories.treeOrdered() : categories.treeOrdered(), id: \.cat.id) { row in
+                            Text(row.cat.treeLabel(depth: row.depth)).tag(Int?.some(row.cat.categoryId))
                         }
                     }
                     Toggle("В наличии", isOn: $vm.isAvailable)

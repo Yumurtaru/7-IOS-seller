@@ -1598,3 +1598,35 @@ extension KeyedDecodingContainer {
         (try? decodeIfPresent(type, forKey: key)) ?? LenientReturnItems(wrappedValue: nil)
     }
 }
+
+extension Array where Element == SellerCategory {
+    /// Дерево для выбора: родитель, за ним его подкатегории. Порядок внутри уровня
+    /// как пришёл с сервера; категория с пропавшим родителем стоит среди верхних.
+    func treeOrdered() -> [(cat: SellerCategory, depth: Int)] {
+        var ids = Set<Int>()
+        for c in self { ids.insert(c.categoryId) }
+        var kids: [Int: [SellerCategory]] = [:]
+        var roots: [SellerCategory] = []
+        for c in self {
+            let pid = c.parentId ?? 0
+            if pid > 0 && pid != c.categoryId && ids.contains(pid) {
+                kids[pid, default: []].append(c)
+            } else {
+                roots.append(c)
+            }
+        }
+        var out: [(cat: SellerCategory, depth: Int)] = []
+        for r in roots {
+            out.append((cat: r, depth: 0))
+            for k in kids[r.categoryId] ?? [] { out.append((cat: k, depth: 1)) }
+        }
+        return out
+    }
+}
+
+extension SellerCategory {
+    /// Подпись в списках выбора: подкатегория — «— Название».
+    func treeLabel(depth: Int) -> String {
+        (depth > 0 ? "— " : "") + (name ?? "—")
+    }
+}

@@ -30,24 +30,42 @@ final class CategoriesViewModel: ObservableObject {
     }
 
     /// sortOrder nil — порядок не задан: сервер ставит категорию в конец уровня.
-    func create(name: String, sortOrder: Int?) async -> Bool {
-        guard !busy else { return false }   // двойной тап создавал две категории
+    /// Возвращает nil при успехе, иначе текст ошибки сервера (показывается в форме,
+    /// у поля «Родительская категория»; 422 по parent_id приходит текстом сервера).
+    func create(name: String, sortOrder: Int?, parentId: Int) async -> String? {
+        guard !busy else { return "" }   // двойной тап создавал две категории
         busy = true; defer { busy = false }
         do {
-            _ = try await API.shared.createCategory(name: name, sortOrder: sortOrder)
+            _ = try await API.shared.createCategory(name: name, parentId: parentId > 0 ? parentId : nil,
+                                                    sortOrder: sortOrder)
             await load()
-            return true
-        } catch { self.error = error.localizedDescription; return false }
+            return nil
+        } catch { return error.localizedDescription }
     }
 
-    func rename(_ c: ProductCategory, name: String, sortOrder: Int) async -> Bool {
-        guard !busy else { return false }   // двойной тап — один запрос
+    /// parent: nil — не менялся (ключ не уходит); 0 — «Нет» (JSON null); >0 — id родителя.
+    func rename(_ c: ProductCategory, name: String, sortOrder: Int, parent: Int?) async -> String? {
+        guard !busy else { return "" }   // двойной тап — один запрос
         busy = true; defer { busy = false }
         do {
-            try await API.shared.updateCategory(id: c.categoryId, name: name, sortOrder: sortOrder)
+            try await API.shared.updateCategory(id: c.categoryId, name: name, sortOrder: sortOrder,
+                                                setParent: parent != nil, parentId: (parent ?? 0) > 0 ? parent : nil)
             await load()
-            return true
-        } catch { self.error = error.localizedDescription; return false }
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
+    /// Категории верхнего уровня (кроме самой редактируемой) — варианты родителя.
+    func parentOptions(excluding id: Int) -> [ProductCategory] {
+        items.filter { ($0.parentId ?? 0) <= 0 && $0.categoryId != id }.sorted(by: Self.before)
+    }
+
+    func hasChildren(_ id: Int) -> Bool {
+        id > 0 && items.contains { ($0.parentId ?? 0) == id }
+    }
+
+    func childCount(_ id: Int) -> Int {
+        items.filter { ($0.parentId ?? 0) == id }.count
     }
 
     func toggle(_ c: ProductCategory) async {
@@ -155,14 +173,26 @@ struct CategoryTreeRow: Identifiable {
     var id: Int { cat.categoryId }
 }
 
+enum CategorySheet: Identifiable {
+    case create(parent: Int)
+    case edit(ProductCategory)
+    case cover(ProductCategory)
+
+    var id: String {
+        switch self {
+        case .create(let p): return "create-\(p)"
+        case .edit(let c): return "edit-\(c.categoryId)"
+        case .cover(let c): return "cover-\(c.categoryId)"
+        }
+    }
+}
+
 struct CategoriesView: View {
     @StateObject private var vm = CategoriesViewModel()
-    @State private var editing: ProductCategory?
-    @State private var creating = false
+    /// Один .sheet(item:) на экран: два .sheet на одной вью не работают.
+    @State private var sheet: CategorySheet?
     /// паритет с Android: удаление категории — только после вопроса.
     @State private var deleting: ProductCategory?
-    /// Обложка категории (метод загрузки был, экрана — нет).
-    @State private var cover: ProductCategory?
 
     var body: some View {
         List {
@@ -184,7 +214,7 @@ struct CategoriesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { creating = true } label: { Image(systemName: "plus") }
+                Button { sheet = .create(parent: 0) } label: { Image(systemName: "plus") }
             }
         }
         .refreshable { await vm.load() }
@@ -195,22 +225,26 @@ struct CategoriesView: View {
                    emptyIcon: "folder", emptyTitle: "Категорий нет",
                    emptySubtitle: "Добавьте категорию, чтобы разложить товары по разделам витрины",
                    retry: { Task { await vm.load() } })
-        .sheet(isPresented: $creating) {
-            // паритет с Android: порядок у новой категории по умолчанию не задан — раньше
-            // всегда уходил 0, и категория вставала первой, а не в конец (seller_products.php).
-            CategoryEditSheet(title: "Новая категория", name: "", sortOrder: nil, busy: vm.busy) { name, sort in
-                await vm.create(name: name, sortOrder: sort)
+        .sheet(item: $sheet) { sh in
+            switch sh {
+            case .create(let parent):
+                CategoryEditSheet(title: parent > 0 ? "Новая подкатегория" : "Новая категория",
+                                  name: "", sortOrder: nil, initialParent: parent,
+                                  parentOptions: vm.parentOptions(excluding: 0), hasChildren: false,
+                                  busy: vm.busy) { name, sort, par in
+                    // паритет с Android: порядок у новой категории по умолчанию не задан.
+                    await vm.create(name: name, sortOrder: sort, parentId: par ?? parent)
+                }
+            case .edit(let c):
+                CategoryEditSheet(title: "Категория", name: c.name ?? "", sortOrder: c.sortOrder ?? 0,
+                                  initialParent: max(0, c.parentId ?? 0),
+                                  parentOptions: vm.parentOptions(excluding: c.categoryId),
+                                  hasChildren: vm.hasChildren(c.categoryId), busy: vm.busy) { name, sort, par in
+                    await vm.rename(c, name: name, sortOrder: sort ?? (c.sortOrder ?? 0), parent: par)
+                }
+            case .cover(let c):
+                CategoryCoverSheet(category: c) { Task { await vm.load() } }
             }
-            .errorAlert($vm.error)
-        }
-        .sheet(item: $cover) { c in
-            CategoryCoverSheet(category: c) { Task { await vm.load() } }
-        }
-        .sheet(item: $editing) { c in
-            CategoryEditSheet(title: "Категория", name: c.name ?? "", sortOrder: c.sortOrder ?? 0, busy: vm.busy) { name, sort in
-                await vm.rename(c, name: name, sortOrder: sort ?? (c.sortOrder ?? 0))
-            }
-            .errorAlert($vm.error)
         }
         .alert("Не получилось", isPresented: Binding(get: { vm.error != nil }, set: { if !$0 { vm.error = nil } })) {
             Button("Понятно", role: .cancel) { vm.error = nil }
@@ -227,8 +261,9 @@ struct CategoriesView: View {
                 Task { await vm.delete(c) }
             }
             Button("Отмена", role: .cancel) { deleting = nil }
-        } message: { _ in
-            Text("Товары останутся в каталоге — они просто окажутся без категории.")
+        } message: { c in
+            Text("Товары останутся в каталоге — они просто окажутся без категории."
+                 + (vm.childCount(c.categoryId) > 0 ? " Подкатегории станут категориями верхнего уровня." : ""))
         }
     }
 
@@ -237,7 +272,7 @@ struct CategoriesView: View {
         let dim = c.isActive == false || row.parentHidden
         return HStack(spacing: 10) {
             // Касание по миниатюре — обложка категории (камера, галерея, убрать).
-            Button { cover = c } label: {
+            Button { sheet = .cover(c) } label: {
                 RemoteImage(path: c.image, size: 40, cornerRadius: 8, placeholderIcon: "folder")
                     .overlay(alignment: .bottomTrailing) {
                         Image(systemName: "camera.circle.fill")
@@ -267,7 +302,15 @@ struct CategoriesView: View {
             // и открывало правку.
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .onTapGesture { editing = c }
+            .onTapGesture { sheet = .edit(c) }
+            if row.depth == 0 {
+                Button { sheet = .create(parent: c.categoryId) } label: {
+                    Image(systemName: "folder.badge.plus").frame(width: 32, height: 32)
+                }
+                .tint(Brand.accent)
+                .disabled(vm.busy)
+                .accessibilityLabel("Добавить подкатегорию")
+            }
             Button {
                 Task { await vm.toggle(c) }
             } label: {
@@ -295,8 +338,14 @@ struct CategoriesView: View {
                       systemImage: c.isActive == false ? "eye" : "eye.slash")
             }
             .tint(Brand.amber)
-            Button { cover = c } label: { Label("Обложка", systemImage: "photo") }
+            Button { sheet = .cover(c) } label: { Label("Обложка", systemImage: "photo") }
                 .tint(Brand.accent)
+            if row.depth == 0 {
+                Button { sheet = .create(parent: c.categoryId) } label: {
+                    Label("Подкатегория", systemImage: "folder.badge.plus")
+                }
+                .tint(Brand.green)
+            }
         }
         .listRowBackground(Brand.card)
     }
@@ -325,10 +374,31 @@ private struct CategoryEditSheet: View {
     let title: String
     @State var name: String
     @State var sortOrder: Int?
+    let initialParent: Int
+    let parentOptions: [ProductCategory]
+    let hasChildren: Bool
     let busy: Bool
-    let onSave: (String, Int?) async -> Bool
+    /// (название, порядок, родитель). Родитель: nil — не менялся; 0 — «Нет»; >0 — id.
+    /// Возвращает nil при успехе или текст ошибки сервера.
+    let onSave: (String, Int?, Int?) async -> String?
 
+    @State private var parentId: Int
+    @State private var fieldError: String?
     @Environment(\.dismiss) private var dismiss
+
+    init(title: String, name: String, sortOrder: Int?, initialParent: Int,
+         parentOptions: [ProductCategory], hasChildren: Bool, busy: Bool,
+         onSave: @escaping (String, Int?, Int?) async -> String?) {
+        self.title = title
+        _name = State(initialValue: name)
+        _sortOrder = State(initialValue: sortOrder)
+        self.initialParent = initialParent
+        self.parentOptions = parentOptions
+        self.hasChildren = hasChildren
+        self.busy = busy
+        self.onSave = onSave
+        _parentId = State(initialValue: initialParent)
+    }
 
     var body: some View {
         NavigationStack {
@@ -343,6 +413,22 @@ private struct CategoryEditSheet: View {
                          + (sortOrder == nil ? " Не задан — встанет после расставленных категорий." : ""))
                 }
                 .listRowBackground(Brand.card)
+                Section {
+                    Picker("Родительская категория", selection: $parentId) {
+                        Text("Нет (верхний уровень)").tag(0)
+                        ForEach(parentOptions) { p in
+                            Text(p.name ?? "—").tag(p.categoryId)
+                        }
+                    }
+                    .disabled(hasChildren)
+                } footer: {
+                    if let e = fieldError, !e.isEmpty {
+                        Text(e).foregroundColor(.red)
+                    } else if hasChildren {
+                        Text("У категории есть подкатегории — она может быть только верхнего уровня")
+                    }
+                }
+                .listRowBackground(Brand.card)
             }
             .scrollContentBackground(.hidden)
             .background(Brand.bg.ignoresSafeArea())
@@ -352,7 +438,15 @@ private struct CategoryEditSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Сохранить") {
-                        Task { if await onSave(name.trimmingCharacters(in: .whitespaces), sortOrder) { dismiss() } }
+                        let trimmed = name.trimmingCharacters(in: .whitespaces)
+                        let sort = sortOrder
+                        // parent_id уходит, только если изменился.
+                        let par: Int? = parentId == initialParent ? nil : parentId
+                        Task {
+                            fieldError = nil
+                            let err = await onSave(trimmed, sort, par)
+                            if let err { fieldError = err } else { dismiss() }
+                        }
                     }
                     .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }

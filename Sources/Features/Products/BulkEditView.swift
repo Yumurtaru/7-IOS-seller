@@ -248,8 +248,8 @@ struct BulkEditView: View {
             Picker("Категория", selection: categoryBinding) {
                 Text("Не менять").tag(-1)
                 Text("Без категории").tag(0)
-                ForEach(m.categories) { cat in
-                    Text(cat.name ?? "—").tag(cat.categoryId ?? 0)
+                ForEach(m.categories.treeOrdered(), id: \.cat.id) { row in
+                    Text(row.cat.treeLabel(depth: row.depth)).tag(row.cat.categoryId)
                 }
             }
         }

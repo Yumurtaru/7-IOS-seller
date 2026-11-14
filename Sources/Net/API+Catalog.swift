@@ -35,12 +35,16 @@ extension API {
     }
 
     func updateCategory(id: Int, name: String? = nil, isActive: Bool? = nil,
-                        sortOrder: Int? = nil, stationRoute: String? = nil) async throws {
+                        sortOrder: Int? = nil, stationRoute: String? = nil,
+                        setParent: Bool = false, parentId: Int? = nil) async throws {
         var body: [String: Any?] = [:]
         if let name { body["name"] = name }
         if let isActive { body["is_active"] = isActive ? 1 : 0 }
         if let sortOrder { body["sort_order"] = sortOrder }
         if let stationRoute { body["station_route"] = stationRoute }
+        // parent_id: число — подкатегория, явный null — верхний уровень (compactMapValues
+        // в makeRequest убирает nil, поэтому NSNull()); не передан — сервер не трогает.
+        if setParent { let v: Any = parentId.map { $0 as Any } ?? NSNull(); body["parent_id"] = v }
         _ = try await put("api/seller/categories/\(id)", body: body, as: Phase2BoolAck.self)
     }
 

@@ -532,9 +532,9 @@ struct ProductsView: View {
                 FilterChip(title: "Скрытые", selected: vm.statusFilter == "hidden") {
                     vm.statusFilter = vm.statusFilter == "hidden" ? nil : "hidden"
                 }
-                ForEach(vm.categories) { cat in
-                    FilterChip(title: cat.name ?? "—", selected: vm.categoryFilter == cat.categoryId) {
-                        vm.categoryFilter = vm.categoryFilter == cat.categoryId ? nil : cat.categoryId
+                ForEach(vm.categories.treeOrdered(), id: \.cat.id) { row in
+                    FilterChip(title: row.cat.treeLabel(depth: row.depth), selected: vm.categoryFilter == row.cat.categoryId) {
+                        vm.categoryFilter = vm.categoryFilter == row.cat.categoryId ? nil : row.cat.categoryId
                     }
                 }
             }
@@ -753,9 +753,9 @@ struct ProductsView: View {
                         }
                         Button("Скрыть") { Task { await vm.bulk(action: "status", value: "hidden") } }
                         Menu("В категорию") {
-                            ForEach(vm.categories) { cat in
-                                Button(cat.name ?? "—") {
-                                    Task { await vm.bulk(action: "category", value: String(cat.categoryId)) }
+                            ForEach(vm.categories.treeOrdered(), id: \.cat.id) { row in
+                                Button(row.cat.treeLabel(depth: row.depth)) {
+                                    Task { await vm.bulk(action: "category", value: String(row.cat.categoryId)) }
                                 }
                             }
                         }
