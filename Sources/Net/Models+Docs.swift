@@ -75,7 +75,11 @@ struct StockDocument: Decodable, Identifiable {
     // А99: накладная поставщика № и дата. Старый сервер полей не шлёт — nil.
     @LenientString var supplierDocNo: String?
     @LenientString var supplierDocDate: String?
+    /// А1328: дата документа ("2026-11-10 14:30:00"); старый сервер не шлёт — nil.
+    let docDate: String?
 
+    /// Дата для показа: проведения, иначе документа, иначе создания.
+    var shownDate: String? { DocDates.shown(posted: postedAt, doc: docDate, created: createdAt) }
     var docId: Int { id ?? 0 }
     var isPosted: Bool { (status ?? "") == "posted" }
     var docType: DocType { DocType(rawValue: type ?? "") ?? .income }
@@ -87,6 +91,17 @@ struct StockDocument: Decodable, Identifiable {
         case postedAt = "posted_at"
         case supplierDocNo = "supplier_doc_no"
         case supplierDocDate = "supplier_doc_date"
+        case docDate = "doc_date"
+    }
+}
+
+/// А1328: дата для показа = posted_at ?? doc_date ?? created_at (пустые строки считаем отсутствием).
+enum DocDates {
+    static func shown(posted: String?, doc: String?, created: String?) -> String? {
+        for s in [posted, doc, created] {
+            if let s, !s.isEmpty { return s }
+        }
+        return nil
     }
 }
 
@@ -102,11 +117,22 @@ struct StockDocumentItem: Decodable, Identifiable {
     @LenientDecimal var price: Decimal?
     @LenientDecimal var amount: Decimal?
     let reason: String?
+    /// Розничная цена строки прихода (А99) — сервер хранит только введённую вручную;
+    /// nil — розница шла по наценке. Нужна, чтобы правка проведённого прихода (А1328)
+    /// не пересчитала розницу товара по наценке категории.
+    @LenientDecimal var retailPrice: Decimal?
+    /// А1328: repost переписывает строки целиком из тела — артикул, штрихкод и срок годности возвращаем как были.
+    let article: String?
+    let barcode: String?
+    let expiresAt: String?
 
     var itemId: Int { id ?? 0 }
 
     enum CodingKeys: String, CodingKey {
         case id, name, unit, price, amount, reason
+        case retailPrice = "retail_price"
+        case article, barcode
+        case expiresAt = "expires_at"
         case productId = "product_id"
         case ingredientId = "ingredient_id"
         case qtyPlan = "qty_plan"
@@ -131,7 +157,10 @@ struct StockDocumentDetail: Decodable {
     // А99: накладная поставщика № и дата (у старого сервера — nil).
     @LenientString var supplierDocNo: String?
     @LenientString var supplierDocDate: String?
+    /// А1328: дата документа; старый сервер не шлёт — nil.
+    let docDate: String?
 
+    var shownDate: String? { DocDates.shown(posted: postedAt, doc: docDate, created: createdAt) }
     var docType: DocType { DocType(rawValue: type ?? "") ?? .income }
     var isPosted: Bool { (status ?? "") == "posted" }
 
@@ -145,6 +174,7 @@ struct StockDocumentDetail: Decodable {
         case supplierId = "supplier_id"
         case supplierDocNo = "supplier_doc_no"
         case supplierDocDate = "supplier_doc_date"
+        case docDate = "doc_date"
     }
 }
 
@@ -271,6 +301,12 @@ struct DocItemDraft: Identifiable {
     var priceTouched: Bool = false
     /// Новая розничная цена для сервера (retail_price) — ставит экран перед отправкой.
     var retailPriceOut: Decimal? = nil
+    /// А1328: розница строки проведённого прихода, как была. Не трогали поле — уходит как есть.
+    var origRetail: Decimal? = nil
+    /// А1328: поля строки проведённого документа, которые repost иначе потерял бы. Обычное создание — nil.
+    var article: String? = nil
+    var barcode: String? = nil
+    var expiresAt: String? = nil
 
     var amount: Decimal { qty * price }
 
@@ -288,6 +324,9 @@ struct DocItemDraft: Identifiable {
             out["qty_fact"] = "\(qty)"
         }
         if let r = reason, !r.isEmpty { out["reason"] = r }
+        if let a = article, !a.isEmpty { out["article"] = a }
+        if let b = barcode, !b.isEmpty { out["barcode"] = b }
+        if let e = expiresAt, !e.isEmpty { out["expires_at"] = String(e.prefix(10)) }
         if let rp = retailPriceOut, rp > 0 {
             out["retail_price"] = ReceiptMath.moneyInput(rp).replacingOccurrences(of: ",", with: ".")
         }
@@ -306,5 +345,66 @@ struct TechCardDraft: Identifiable {
 
     var payload: [String: Any] {
         ["ingredient_id": ingredientId, "qty_gross": "\(qtyGross)", "qty_net": "\(qtyNet)"]
+    }
+}
+
+// ── А1328: обнуление остатков и правка проведённого документа ───────────────
+
+struct ZeroStockDoc: Decodable {
+    @LenientInt var id: Int?
+    let number: String?
+    @LenientInt var warehouseId: Int?
+    let warehouse: String?
+    @LenientInt var lines: Int?
+    enum CodingKeys: String, CodingKey {
+        case id, number, warehouse, lines
+        case warehouseId = "warehouse_id"
+    }
+}
+
+struct ZeroStockItem: Decodable {
+    @LenientInt var id: Int?
+    let name: String?
+    @LenientInt var warehouseId: Int?
+    /// Остаток ДО обнуления, строкой ("12.5") — показываем как есть.
+    @LenientString var qty: String?
+    enum CodingKeys: String, CodingKey {
+        case id, name, qty
+        case warehouseId = "warehouse_id"
+    }
+}
+
+struct ZeroStockSkip: Decodable {
+    @LenientInt var id: Int?
+    let name: String?
+    let reason: String?
+}
+
+struct ZeroStockResult: Decodable {
+    let mode: String?
+    @LenientBool var dryRun: Bool?
+    @LenientInt var zeroed: Int?
+    @LenientInt var unchanged: Int?
+    @LenientInt var notFound: Int?
+    let documents: [ZeroStockDoc]?
+    @LenientInt var batchId: Int?
+    let skipped: [ZeroStockSkip]?
+    let items: [ZeroStockItem]?
+    let message: String?
+    enum CodingKeys: String, CodingKey {
+        case mode, documents, skipped, items, message, zeroed, unchanged
+        case dryRun = "dry_run"
+        case notFound = "not_found"
+        case batchId = "batch_id"
+    }
+}
+
+struct RepostResult: Decodable {
+    @LenientBool var reposted: Bool?
+    let docDate: String?
+    let warnings: [String]?
+    enum CodingKeys: String, CodingKey {
+        case reposted, warnings
+        case docDate = "doc_date"
     }
 }

@@ -753,6 +753,9 @@ struct ProductsPage: Decodable {
     /// АY (сайт А616): у позиций есть stop_until или category_id — сервер знает
     /// фильтры avail/stopped/nophoto/nocat/lowstock и sort/dir. Старый сервер — false.
     var knowsFilters = false
+    /// А1328: у позиций есть ключ purchase_price (значение может быть null) — сервер знает
+    /// закупочную цену и фильтр nopurchase. Старый сервер — false.
+    var knowsPurchase = false
     enum CodingKeys: String, CodingKey {
         case items, page
         case hasMore = "has_more"
@@ -765,6 +768,8 @@ struct ProductsPage: Decodable {
         _hasMore = try c.decode(LenientBool.self, forKey: .hasMore)
         let probe = (try? c.decode([ProductNewFieldsProbe].self, forKey: .items)) ?? []
         knowsFilters = probe.contains { $0.present }
+        let pp = (try? c.decode([ProductPurchaseProbe].self, forKey: .items)) ?? []
+        knowsPurchase = pp.contains { $0.present }
     }
 }
 
@@ -778,6 +783,16 @@ private struct ProductNewFieldsProbe: Decodable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         present = c.contains(.stopUntil) || c.contains(.categoryId)
+    }
+}
+
+/// А1328: есть ли у строки товара ключ purchase_price.
+private struct ProductPurchaseProbe: Decodable {
+    let present: Bool
+    enum CodingKeys: String, CodingKey { case purchasePrice = "purchase_price" }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        present = c.contains(.purchasePrice)
     }
 }
 
@@ -806,9 +821,12 @@ struct ProductSummary: Decodable, Identifiable {
     var moderationReason: String?
     /// O1: оптовые ступени. Ключа нет (старый сервер) — nil = опта нет.
     @LenientPriceTiers var priceTiers: [PriceTier]?
+    /// А1328: закупочная цена ("45.50" | null). Старый сервер ключа не шлёт — nil.
+    @LenientDecimal var purchasePrice: Decimal?
 
     enum CodingKeys: String, CodingKey {
         case id, name, article, barcode, price, type, status, category, photo, stopped, unit
+        case purchasePrice = "purchase_price"
         case priceTiers = "price_tiers"
         case moderationHidden = "moderation_hidden"
         case moderationReason = "moderation_reason"
@@ -858,9 +876,14 @@ struct ProductDetail: Decodable {
     var moderationReason: String?
     /// O1: оптовые ступени. Ключа нет (старый сервер) — nil; продавец тогда ключ не шлёт, пока не тронет блок.
     @LenientPriceTiers var priceTiers: [PriceTier]?
+    /// А1328: закупочная цена ("45.50" | null) и текущий остаток (колонка products.stock_qty). Старый сервер — nil.
+    @LenientDecimal var purchasePrice: Decimal?
+    @LenientDecimal var stockQty: Decimal?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, type, price, unit, weight, article, barcode
+        case purchasePrice = "purchase_price"
+        case stockQty = "stock_qty"
         case priceTiers = "price_tiers"
         case calories, proteins, fats, carbs, status, photos, tags, allergens
         case moderationHidden = "moderation_hidden"

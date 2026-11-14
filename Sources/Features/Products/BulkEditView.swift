@@ -183,6 +183,7 @@ struct BulkEditView: View {
         }
         priceSection
         if canPrice { priceOldSection }
+        if canPrice { purchaseSection }
         categorySection
         unitSection
         stockSection
@@ -239,6 +240,20 @@ struct BulkEditView: View {
                 Text("Не менять").tag("")
                 Text("Да").tag("1")
                 Text("Нет").tag("0")
+            }
+        }
+    }
+
+    /// А1328: закупочная цена. Право «Цены», как у розницы.
+    private var purchaseSection: some View {
+        Section("Закупочная цена") {
+            Picker("Закупочная цена", selection: $m.form.purchaseMode) {
+                Text("Не менять").tag("")
+                Text("Задать").tag("set")
+                Text("Очистить").tag("clear")
+            }
+            if m.form.purchaseMode == "set" {
+                TextField("Закупочная цена, ₽", text: $m.form.purchaseValue).keyboardType(.decimalPad)
             }
         }
     }

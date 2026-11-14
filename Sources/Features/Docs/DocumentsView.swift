@@ -123,6 +123,15 @@ final class DocumentsViewModel: ObservableObject {
         }
     }
 
+    /// А1328: карточка документа для правки («Изменить» / «Изменить дату»). Ошибка — текстом сервера.
+    func loadDetail(_ d: StockDocument) async -> StockDocumentDetail? {
+        guard busyId == nil else { return nil }
+        busyId = d.docId; defer { busyId = nil }
+        do { return try await API.shared.document(id: d.docId) }
+        catch is CancellationError { return nil }
+        catch { self.error = error.localizedDescription; return nil }
+    }
+
     func duplicate(_ d: StockDocument) async {
         guard busyId == nil else { return }
         busyId = d.docId; defer { busyId = nil }
@@ -131,13 +140,29 @@ final class DocumentsViewModel: ObservableObject {
     }
 }
 
+/// Один лист на экран (два .sheet на одной вью не работают).
+enum DocsSheet: Identifiable {
+    case create(DocType)
+    case detail(Int)
+    case edit(StockDocumentDetail)
+    case date(StockDocumentDetail)
+
+    var id: String {
+        switch self {
+        case .create(let t): return "create-\(t.rawValue)"
+        case .detail(let i): return "detail-\(i)"
+        case .edit(let d): return "edit-\(d.id ?? 0)"
+        case .date(let d): return "date-\(d.id ?? 0)"
+        }
+    }
+}
+
 struct DocumentsView: View {
     @StateObject private var vm = DocumentsViewModel()
-    @State private var creating: DocType?
+    @State private var sheet: DocsSheet?
     /// Приход по фото накладной: пункт есть, только если сервер ответил на GET /state (старый — 404).
     @ObservedObject private var ocrFeature = InvoiceOcrFeature.shared
     @State private var showOcr = false
-    @State private var openDoc: StockDocument?
     @State private var cancelTarget: StockDocument?
     /// А316: отмена черновика (status → cancelled, без движений) — с вопросом.
     @State private var draftCancelTarget: StockDocument?
@@ -153,7 +178,7 @@ struct DocumentsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(d.docType.title) \(d.number ?? "")")
                                     .font(.subheadline.weight(.semibold)).foregroundColor(Brand.text)
-                                Text(DateFmt.short(d.createdAt)).font(.caption).foregroundColor(Brand.muted)
+                                Text(DateFmt.short(d.shownDate)).font(.caption).foregroundColor(Brand.muted)
                                 if let s = d.supplier, !s.isEmpty {
                                     Text(s).font(.caption2).foregroundColor(Brand.muted)
                                 }
@@ -172,7 +197,7 @@ struct DocumentsView: View {
                             }
                         }
                         HStack(spacing: 12) {
-                            Button("Состав") { openDoc = d }
+                            Button("Состав") { sheet = .detail(d.docId) }
                                 .font(.caption.weight(.semibold))
                                 .buttonStyle(.borderless)
                             // Проведение двигает остатки, отмена возвращает их
@@ -209,6 +234,22 @@ struct DocumentsView: View {
                         // Пока идёт действие по любому документу, кнопки остальных тоже
                         // неактивны: нажатие на них молча отбрасывалось.
                         .disabled(vm.busyId != nil)
+                        // А1328: правка проведённого — нужны оба права (сервер: documents.post и documents.cancel).
+                        if d.isPosted && Session.shared.can("documents.post") && Session.shared.can("documents.cancel") {
+                            HStack(spacing: 12) {
+                                Button("Изменить") {
+                                    Task { if let det = await vm.loadDetail(d) { sheet = .edit(det) } }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.borderless)
+                                Button("Изменить дату") {
+                                    Task { if let det = await vm.loadDetail(d) { sheet = .date(det) } }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.borderless)
+                            }
+                            .disabled(vm.busyId != nil)
+                        }
                     }
                     .padding(.vertical, 2)
                     .listRowBackground(Brand.card)
@@ -246,7 +287,7 @@ struct DocumentsView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     ForEach(DocType.allCases) { t in
-                        Button { creating = t } label: { Label(t.title, systemImage: t.icon) }
+                        Button { sheet = .create(t) } label: { Label(t.title, systemImage: t.icon) }
                     }
                     // Приход по фото накладной: право «Склад», сервер включил распознавание.
                     if ocrFeature.available && Session.shared.can("warehouse") {
@@ -263,17 +304,35 @@ struct DocumentsView: View {
         // Не только .idle: ушли с экрана посреди первой загрузки — она отменилась,
         // состояние осталось .loading, и при возврате спиннер висел навсегда.
         .task { if vm.state != .loaded { await vm.load() } }
-        .sheet(item: $creating) { t in
-            NavigationStack {
-                DocumentEditView(type: t, onSaved: { Task { await vm.load() } },
-                                 // Окно ещё закрывается — сообщение показываем после него.
-                                 onNotice: { text in
-                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { vm.notice = text }
-                                 })
+        .sheet(item: $sheet) { sh in
+            switch sh {
+            case .create(let t):
+                NavigationStack {
+                    DocumentEditView(type: t, onSaved: { Task { await vm.load() } },
+                                     // Окно ещё закрывается — сообщение показываем после него.
+                                     onNotice: { text in
+                                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { vm.notice = text }
+                                     })
+                }
+            case .detail(let id):
+                NavigationStack { DocumentDetailView(docId: id) }
+            case .edit(let det):
+                NavigationStack {
+                    DocumentEditView(type: det.docType, editing: det,
+                                     onSaved: { Task { await vm.load(keepPages: true) } },
+                                     onNotice: { text in
+                                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { vm.notice = text }
+                                     })
+                }
+            case .date(let det):
+                NavigationStack {
+                    DocumentDateSheet(doc: det,
+                                      onDone: { text in
+                                          Task { await vm.load(keepPages: true) }
+                                          if let text { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { vm.notice = text } }
+                                      })
+                }
             }
-        }
-        .sheet(item: $openDoc) { d in
-            NavigationStack { DocumentDetailView(docId: d.docId) }
         }
         .confirmationDialog(
             "Отменить проведение?",
@@ -357,6 +416,7 @@ struct DocumentDetailView: View {
                     // Паритет с Android: отменённый — «Отменён», а не «Черновик».
                     InfoRow(label: "Статус", value: d.isPosted ? "Проведён" : (d.status == "cancelled" ? "Отменён" : "Черновик"))
                     InfoRow(label: "Создан", value: DateFmt.short(d.createdAt))
+                    if let dd = d.docDate, !dd.isEmpty { InfoRow(label: "Дата документа", value: DateFmt.short(dd)) }
                     if d.isPosted { InfoRow(label: "Проведён", value: DateFmt.short(d.postedAt)) }
                     // А99: накладная поставщика № и дата.
                     if let n = ReceiptMath.supplierDocText(no: d.supplierDocNo, date: d.supplierDocDate) {
@@ -412,5 +472,91 @@ struct DocumentDetailView: View {
     /// Общий форматтер вместо нового NumberFormatter на каждую строку состава.
     private func qty(_ v: Decimal?) -> String {
         QtyFmt.qty(v)
+    }
+}
+
+// ── А1328: «Изменить дату» проведённого документа ────────────────────────────
+// Выбор даты-времени → POST …/repost только с doc_date: состав прежний, движения и партии
+// переезжают на новую дату. 409 — документ остался прежним.
+
+struct DocumentDateSheet: View {
+    let doc: StockDocumentDetail
+    var onDone: (String?) -> Void = { _ in }
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var date: Date
+    @State private var touched = false
+    @State private var saving = false
+    @State private var error: String?
+    @State private var needsReload = false
+    @State private var idem = IdempotencyKeys.form()
+
+    init(doc: StockDocumentDetail, onDone: @escaping (String?) -> Void = { _ in }) {
+        self.doc = doc
+        self.onDone = onDone
+        _date = State(initialValue: DateFmt.parse(doc.shownDate) ?? Date())
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                DatePicker("Дата документа",
+                           selection: Binding(get: { date }, set: { date = $0; touched = true }),
+                           in: ...Date(), displayedComponents: [.date, .hourAndMinute])
+                Text("Документ начнёт работать с этой даты: движения, партии и отчёты переедут на неё. Не раньше чем за год и не позже текущего момента.")
+                    .font(.caption).foregroundColor(Brand.muted)
+            }
+            .listRowBackground(Brand.card)
+            Section {
+                Button { Task { await save() } } label: {
+                    Text(saving ? "Сохраняем…" : "Изменить дату")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(saving || !touched)
+            }
+            .listRowBackground(Brand.card)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Brand.bg.ignoresSafeArea())
+        .navigationTitle("Дата документа")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Отмена") {
+                    if needsReload { onDone(nil) }
+                    dismiss()
+                }
+                .disabled(saving)
+            }
+        }
+        .interactiveDismissDisabled(saving || needsReload)
+        .alert("Не получилось", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("Понятно", role: .cancel) { error = nil }
+        } message: { Text(error ?? "") }
+    }
+
+    private func save() async {
+        guard !saving, let id = doc.id else { return }
+        saving = true; defer { saving = false }
+        let dd = DateFmt.docDateOut(date)
+        do {
+            let r = try await API.shared.repostDocument(
+                id: id, items: nil, comment: nil, supplierId: nil, warehouseId: nil, warehouseToId: nil,
+                supplierDocNo: nil, supplierDocDate: nil, docDate: dd, keys: idem)
+            let w = (r.warnings ?? []).filter { !$0.isEmpty }
+            onDone(w.isEmpty ? nil : w.joined(separator: "\n"))
+            dismiss()
+        } catch let e as APIDetailedError {
+            // 409 — документ остался прежним; список перечитаем при закрытии. 5xx — исход неизвестен,
+            // повтор уйдёт с тем же ключом.
+            if e.status == 409 && (e.code ?? "").hasPrefix("idempotency") == false { needsReload = true }
+            error = e.status == 409 && (e.code ?? "").hasPrefix("idempotency") == false
+                ? "\(e.message)\nДокумент остался прежним." : e.message
+        } catch is CancellationError {
+        } catch {
+            needsReload = true
+            self.error = error.localizedDescription
+        }
     }
 }

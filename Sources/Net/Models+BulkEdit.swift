@@ -209,6 +209,8 @@ struct BulkForm: Equatable {
     var oldMode = ""              // "" | clear | from_price | set
     var oldValue = ""
     var retail = ""               // "" | 1 | 0
+    var purchaseMode = ""         // "" | set | clear  (А1328)
+    var purchaseValue = ""
     var categoryTouched = false
     var categoryId = 0            // 0 = без категории
     var unit = ""
@@ -276,6 +278,15 @@ enum BulkEditLogic {
             c["price_old"] = o
         }
         if canPrice && !f.retail.isEmpty { c["retail_price_manual"] = Int(f.retail) ?? 0 }
+        // А1328: закупочная цена — «Задать» (значение) или «Очистить» (без значения).
+        if canPrice && f.purchaseMode == "set" {
+            guard let v = parse(f.purchaseValue, fraction: 2, allowNegative: false) else {
+                return .bad("Закупочная цена: введите число, например 120 или 45,50")
+            }
+            c["purchase_price"] = ["mode": "set", "value": str(v)] as [String: Any]
+        } else if canPrice && f.purchaseMode == "clear" {
+            c["purchase_price"] = ["mode": "clear"] as [String: Any]
+        }
         if f.categoryTouched { c["category_id"] = f.categoryId }
         if f.unitClear {
             c["unit"] = ""
@@ -338,7 +349,7 @@ enum BulkEditLogic {
         case .list(let a):
             return a.isEmpty ? "—" : a.joined(separator: ", ")
         case .string(let s):
-            if field == "price" || field == "price_old" {
+            if field == "price" || field == "price_old" || field == "purchase_price" {
                 if let d = Decimal(string: s) { return Money.rub(d) }
                 return s
             }
@@ -346,7 +357,7 @@ enum BulkEditLogic {
             if field == "status" { return s == "active" ? "показан" : (s == "hidden" ? "скрыт" : s) }
             return s.isEmpty ? "—" : s
         case .number(let d):
-            if field == "price" || field == "price_old" { return Money.rub(Decimal(string: String(d)) ?? 0) }
+            if field == "price" || field == "price_old" || field == "purchase_price" { return Money.rub(Decimal(string: String(d)) ?? 0) }
             return showNumber(field: field, d: d, categoryName: categoryName)
         }
     }

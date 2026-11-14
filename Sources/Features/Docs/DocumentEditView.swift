@@ -16,6 +16,13 @@ import SwiftUI
 @MainActor
 final class DocumentEditViewModel: ObservableObject {
     let type: DocType
+    /// А1328: id ПРОВЕДЁННОГО документа, который правим («Сохранить и провести заново»); nil — новый документ.
+    let repostId: Int?
+    /// А1328: «Дата документа» (дата-время). Уходит на сервер только если пользователь её менял.
+    @Published var docDate = Date()
+    @Published var docDateTouched = false
+    /// А1328: правка не прошла (409) или исход неизвестен — при закрытии окна список перечитать.
+    @Published var needsReload = false
 
     @Published var items: [DocItemDraft] = []
     @Published var warehouses: [WarehouseInfo] = []
@@ -68,7 +75,13 @@ final class DocumentEditViewModel: ObservableObject {
     @Published var probeBusy = false
     @Published var infos: [String: PriceInfoItem] = [:]
     @Published var supplierDocNo = ""
-    @Published var supplierDocDate = Date()
+    @Published var supplierDocDate = Date() {
+        didSet { supplierDocDateSet = true }
+    }
+    /// А1328: дату накладной задавали (есть в документе или менял DatePicker); иначе repost ключ не трогает.
+    var supplierDocDateSet = false
+    /// А1328: строки с удалённым товаром — в редактор не попадают и не сохранятся.
+    @Published var droppedNames: [String] = []
     @Published var bulkMarkup = ""
     @Published var bulkRounding = "integer"
     @Published var note: String?
@@ -77,7 +90,59 @@ final class DocumentEditViewModel: ObservableObject {
     @Published var infoFailed: Set<String> = []
     @Published var infoLoading: Set<String> = []
 
-    init(type: DocType) { self.type = type }
+    init(type: DocType, editing: StockDocumentDetail? = nil) {
+        self.type = type
+        self.repostId = editing?.id
+        guard let d = editing else { return }
+        // Текущий состав проведённого документа — в редактор; закупку не трогают сведения сервера.
+        var rows: [DocItemDraft] = []
+        var dropped: [String] = []
+        for it in d.items ?? [] {
+            let isIng = (it.ingredientId ?? 0) > 0
+            // Товар удалён (ни product_id, ни ingredient_id): строку сервер не пересоздаст — не шлём молча.
+            if !isIng && (it.productId ?? 0) <= 0 {
+                dropped.append(it.name ?? "—")
+                continue
+            }
+            let fact: Decimal = it.qtyFact ?? it.qtyPlan ?? 0
+            let unitText: String = (it.unit ?? "").isEmpty ? "шт" : (it.unit ?? "шт")
+            let reasonText: String? = (it.reason ?? "").isEmpty ? nil : it.reason
+            var row = DocItemDraft(
+                kind: isIng ? "ingredient" : "product",
+                entityId: (isIng ? it.ingredientId : it.productId) ?? 0,
+                name: it.name ?? "—",
+                unit: unitText,
+                qty: fact,
+                qtyPlan: d.docType.isInventory ? (it.qtyPlan ?? 0) : nil,
+                price: it.price ?? 0,
+                reason: reasonText
+            )
+            row.priceTouched = true
+            row.article = it.article
+            row.barcode = it.barcode
+            row.expiresAt = it.expiresAt
+            // Ручная розница строки — в поле и «как была»: иначе повторное проведение
+            // пересчитало бы цену товара по наценке категории.
+            if let rp = it.retailPrice, rp > 0 {
+                row.retailText = ReceiptMath.moneyInput(rp)
+                row.origRetail = rp
+            }
+            rows.append(row)
+        }
+        items = rows
+        droppedNames = dropped
+        warehouseId = d.warehouseId
+        warehouseToId = d.warehouseToId
+        supplierId = d.supplierId
+        comment = d.comment ?? ""
+        supplierDocNo = d.supplierDocNo ?? ""
+        if let sd = DateFmt.parse(d.supplierDocDate) { supplierDocDate = sd; supplierDocDateSet = true }
+        if let dd = DateFmt.parse(d.shownDate) { docDate = dd }
+    }
+
+    var isRepost: Bool { repostId != nil }
+    /// Подпись кнопки проведения и в сообщениях об исходе.
+    var postLabel: String { isRepost ? "Сохранить и провести заново" : "Создать и провести" }
 
     var isIncome: Bool { type == .income }
     /// Номер и дата накладной — только на сервере с волной А99 (иначе их молча не сохранить).
@@ -286,7 +351,11 @@ final class DocumentEditViewModel: ObservableObject {
             lines.append("Нет данных о цене: " + missing.prefix(5).joined(separator: ", ") + (missing.count > 5 ? "…" : "")
                 + (retailOn ? " — цена может измениться по наценке категории — сведения не загрузились" : " — сведения не загрузились"))
         }
-        lines.append("Остатки увеличатся сразу после проведения. Отменить проведение можно в списке документов.")
+        if isRepost {
+            lines.append("Документ будет распроведён и проведён заново с новыми данными. Если позиция уйдёт в минус — ничего не изменится.")
+        } else {
+            lines.append("Остатки увеличатся сразу после проведения. Отменить проведение можно в списке документов.")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -391,6 +460,7 @@ final class DocumentEditViewModel: ObservableObject {
                 supplierId: supplierId, comment: comment, post: post, items: out,
                 supplierDocNo: no.isEmpty ? nil : no,
                 supplierDocDate: no.isEmpty ? nil : DateFmt.ymd(supplierDocDate),
+                docDate: docDateTouched ? DateFmt.docDateOut(docDate) : nil,
                 keys: idemKeys
             )
             skippedNotice = post ? ack.skippedLines?.text : nil
@@ -445,9 +515,78 @@ final class DocumentEditViewModel: ObservableObject {
 
     private func unknownOutcome(post: Bool, _ message: String) -> Bool {
         pendingPost = post
-        self.error = "\(message). Документ мог создаться — нажмите «\(post ? "Создать и провести" : "Сохранить черновик")» "
-            + "ещё раз, ничего не меняя: второй документ сервер не создаст."
+        needsReload = true
+        let label: String = post ? postLabel : "Сохранить черновик"
+        let tail: String = isRepost ? "Правка могла пройти" : "Документ мог создаться"
+        self.error = "\(message). \(tail) — нажмите «\(label)» ещё раз, ничего не меняя: повтор сервер не задвоит."
         return false
+    }
+
+    /// А1328: предупреждения сервера после «провести заново» (например, «после даты есть инвентаризация…»).
+    @Published var warningsText: String?
+
+    /// А1328: проведённый документ — «Сохранить и провести заново» (POST …/repost).
+    /// 409 — документ остался прежним; исход неизвестен — повтор с тем же ключом.
+    func saveRepost() async -> Bool {
+        guard let rid = repostId, !saving else { return false }
+        saving = true; defer { saving = false }
+        let out: [DocItemDraft] = items.map { d in
+            var x = d
+            x.retailPriceOut = manualRetailOut(d)
+            // Розницу не меняли (или сведения о товаре не загрузились) — прежняя уходит как есть.
+            if x.retailPriceOut == nil, let orig = d.origRetail, d.retailText == ReceiptMath.moneyInput(orig) {
+                x.retailPriceOut = orig
+            }
+            return x
+        }
+        let no = docFieldsOn ? String(supplierDocNo.trimmingCharacters(in: .whitespaces).prefix(64)) : ""
+        let sdNo: String? = docFieldsOn ? no : nil
+        let sdDate: String? = docFieldsOn ? (no.isEmpty ? "" : (supplierDocDateSet ? DateFmt.ymd(supplierDocDate) : nil)) : nil
+        let dd: String? = docDateTouched ? DateFmt.docDateOut(docDate) : nil
+        do {
+            let r = try await API.shared.repostDocument(
+                id: rid, items: out, comment: comment, supplierId: supplierId,
+                warehouseId: warehouseId, warehouseToId: warehouseToId,
+                supplierDocNo: sdNo, supplierDocDate: sdDate, docDate: dd, keys: idemKeys)
+            let w = (r.warnings ?? []).filter { !$0.isEmpty }
+            warningsText = w.isEmpty ? nil : w.joined(separator: "\n")
+            pendingPost = nil
+            return true
+        } catch let e as APIDetailedError {
+            if e.status >= 500 || e.code == "idempotency_in_progress" {
+                return unknownOutcome(post: true, e.message)
+            }
+            pendingPost = nil
+            needsReload = true
+            if e.code == "idempotency_unknown_outcome" {
+                draftSaved = true
+                self.error = "\(e.message). Закройте окно и проверьте документ в списке."
+                return false
+            }
+            if e.status == 409 {
+                self.error = "\(e.message)\nДокумент остался прежним."
+                return false
+            }
+            self.error = e.message
+            return false
+        } catch let e as APIError {
+            switch e {
+            case .network, .timeout, .http: return unknownOutcome(post: true, e.localizedDescription)
+            case .decoding:
+                pendingPost = nil
+                draftSaved = true
+                self.error = "Документ, скорее всего, изменён — закройте окно и проверьте список документов."
+                return false
+            default:
+                pendingPost = nil
+                self.error = e.localizedDescription
+                return false
+            }
+        } catch {
+            pendingPost = nil
+            self.error = error.localizedDescription
+            return false
+        }
     }
 }
 
@@ -463,11 +602,39 @@ struct DocumentEditView: View {
     @State private var confirmPost = false
     @Environment(\.dismiss) private var dismiss
 
-    init(type: DocType, onSaved: @escaping () -> Void = {}, onNotice: @escaping (String) -> Void = { _ in }) {
+    init(type: DocType, editing: StockDocumentDetail? = nil,
+         onSaved: @escaping () -> Void = {}, onNotice: @escaping (String) -> Void = { _ in }) {
         self.type = type
         self.onSaved = onSaved
         self.onNotice = onNotice
-        _vm = StateObject(wrappedValue: DocumentEditViewModel(type: type))
+        _vm = StateObject(wrappedValue: DocumentEditViewModel(type: type, editing: editing))
+    }
+
+    /// А1328: проведённый документ изменён: предупреждения сервера — в список, список перечитать.
+    private func finishReposted() {
+        if let w = vm.warningsText { onNotice(w) }
+        onSaved()
+        dismiss()
+    }
+
+    /// Проведение (новый документ) или «провести заново» (правка проведённого).
+    private func runPost() async {
+        if vm.isRepost {
+            if await vm.saveRepost() { finishReposted() }
+        } else if await vm.save(post: true) {
+            finishPosted()
+        }
+    }
+
+    private func startRepost() {
+        let missing = vm.items.filter { vm.noInfo($0) }
+        if !missing.isEmpty { Task { await vm.loadInfo(for: missing) } }
+        if vm.modeUnknown { Task { await vm.loadReceiptProbe() } }
+        if vm.postNeedsConfirm {
+            confirmPost = true
+        } else {
+            Task { await runPost() }
+        }
     }
 
     /// Документ создан и проведён: список перечитать, пропущенные строки — назвать.
@@ -483,7 +650,7 @@ struct DocumentEditView: View {
             // новый ключ повтора и второй документ на сервере).
             if let p = vm.pendingPost {
                 Section {
-                    Text("Ждём ответ сервера — нажмите «\(p ? "Создать и провести" : "Сохранить черновик")» ещё раз, ничего не меняя")
+                    Text("Ждём ответ сервера — нажмите «\(p ? vm.postLabel : "Сохранить черновик")» ещё раз, ничего не меняя")
                         .font(.caption).foregroundColor(Brand.amber)
                 }
                 .listRowBackground(Brand.card)
@@ -547,6 +714,15 @@ struct DocumentEditView: View {
             .disabled(vm.pendingPost != nil)
             .listRowBackground(Brand.card)
 
+            // А1328: дата документа — по ней идут движения, партии и отчёты; по умолчанию «сейчас».
+            Section {
+                DatePicker("Дата документа",
+                           selection: Binding(get: { vm.docDate }, set: { vm.docDate = $0; vm.docDateTouched = true }),
+                           in: ...Date(), displayedComponents: [.date, .hourAndMinute])
+            }
+            .disabled(vm.pendingPost != nil)
+            .listRowBackground(Brand.card)
+
             // А99: наценка для всех товаров прихода разом (только «Полный магазин»).
             if vm.isIncome && vm.retailOn {
                 if !vm.mayPrice {
@@ -582,6 +758,10 @@ struct DocumentEditView: View {
             }
 
             Section("Позиции") {
+                ForEach(vm.droppedNames, id: \.self) { n in
+                    Text(verbatim: "Товар удалён — строка не сохранится: \(n)")
+                        .font(.caption).foregroundColor(Brand.red)
+                }
                 ForEach($vm.items) { $item in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -679,23 +859,38 @@ struct DocumentEditView: View {
                 }
             }
             .listRowBackground(Brand.card)
+
+            if vm.isRepost {
+                Section {
+                    Button { startRepost() } label: {
+                        Text("Сохранить и провести заново")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(vm.saving || vm.blocker != nil || vm.postBlocker != nil || vm.draftSaved)
+                    Text("Документ будет распроведён, изменён и проведён заново: остатки пересчитаются. Если позиция уйдёт в минус, всё останется как было.")
+                        .font(.caption).foregroundColor(Brand.muted)
+                }
+                .listRowBackground(Brand.card)
+            }
         }
         .scrollContentBackground(.hidden)
         .background(Brand.bg.ignoresSafeArea())
-        .navigationTitle(type.title)
+        .navigationTitle(vm.isRepost ? "Изменить: \(type.title)" : type.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // Черновик уже сохранён — «Закрыть» перечитывает список, чтобы он там появился.
             ToolbarItem(placement: .cancellationAction) {
                 Button(vm.draftSaved ? "Закрыть" : "Отмена") {
                     // Исход отправки неизвестен — документ мог создаться: тоже перечитываем список.
-                    if vm.draftSaved || vm.pendingPost != nil { onSaved() }
+                    if vm.draftSaved || vm.pendingPost != nil || vm.needsReload { onSaved() }
                     dismiss()
                 }
                 // Пока документ уходит — не закрываем (ключ повтора живёт с окном).
                 .disabled(vm.saving)
             }
             ToolbarItem(placement: .primaryAction) {
+                if !vm.isRepost {
                 Menu {
                     Button("Сохранить черновик") {
                         Task { if await vm.save(post: false) { onSaved(); dismiss() } }
@@ -726,13 +921,14 @@ struct DocumentEditView: View {
                     }
                 } label: { Text("Готово") }
                 .disabled(vm.saving || vm.blocker != nil || vm.draftSaved)
+                }
             }
         }
         .task { await vm.loadRefs() }
         // А99: проба приёмки — параллельно со складами (старый сервер — ничего не меняется).
         .task { await vm.loadReceiptProbe() }
-        .alert("Провести приход?", isPresented: $confirmPost) {
-            Button("Провести") { Task { if await vm.save(post: true) { finishPosted() } } }
+        .alert(vm.isRepost ? "Провести заново?" : "Провести приход?", isPresented: $confirmPost) {
+            Button(vm.isRepost ? "Провести заново" : "Провести") { Task { await runPost() } }
             Button("Вернуться", role: .cancel) {}
         } message: { Text(vm.postSummary) }
         // Документ открыт листом: случайный свайп вниз закрывал его и стирал все

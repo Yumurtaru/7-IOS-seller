@@ -155,6 +155,15 @@ enum DateFmt {
     /// "yyyy-MM-dd" по Москве — для фильтров по времени сервера (created_at в МСК),
     /// например «сегодня» в продажах кассы; так же считает приложение на Android.
     static func ymdMoscow(_ date: Date) -> String { serverDate.string(from: date) }
+    private static let docDateOutFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Europe/Moscow")   // сервер читает doc_date по своим часам (МСК)
+        return f
+    }()
+    /// А1328: дата-время документа склада для doc_date — "yyyy-MM-dd'T'HH:mm" по часам сервера (МСК).
+    static func docDateOut(_ date: Date) -> String { docDateOutFmt.string(from: date) }
 }
 
 // ── Статусы заказов: подписи, цвета, машина переходов (зеркало routes/seller.php) ──

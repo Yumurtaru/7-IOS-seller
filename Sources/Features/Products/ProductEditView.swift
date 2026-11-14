@@ -25,6 +25,11 @@ final class ProductEditViewModel: ObservableObject {
     @Published var type = "product"
     @Published var price = ""
     @Published var priceOld = ""
+    /// А1328: закупочная цена. Ключ уходит на сервер только если значение менялось (purchaseLoaded — как пришло).
+    @Published var purchasePrice = ""
+    private var purchaseLoaded = ""
+    /// А1328: остаток товара (products.stock_qty) — для кнопки «Обнулить»; nil — сервер не прислал.
+    @Published private(set) var stockQty: Decimal?
     @Published var unit = ""
     @Published var weight = ""
     @Published var article = ""
@@ -209,6 +214,9 @@ final class ProductEditViewModel: ObservableObject {
             type = p.type ?? "product"
             price = p.price.map { "\($0)" } ?? ""
             priceOld = p.priceOld.map { "\($0)" } ?? ""
+            purchaseLoaded = p.purchasePrice.map { "\($0)" } ?? ""
+            purchasePrice = purchaseLoaded
+            stockQty = p.stockQty
             unit = p.unit ?? ""
             weight = p.weight.map { "\($0)" } ?? ""
             article = p.article ?? ""
@@ -242,6 +250,12 @@ final class ProductEditViewModel: ObservableObject {
         } catch {
             if gen == loadGen { state = .failed(error.localizedDescription) }
         }
+    }
+
+    /// А1328: после «Обнулить» перечитываем только остаток — несохранённые правки формы не трогаем.
+    func refreshStock() async {
+        guard let id = productId else { return }
+        if let p = try? await API.shared.product(id: id) { stockQty = p.stockQty }
     }
 
     // ── Сканер штрихкода ─────────────────────────────────────────────────────
@@ -334,6 +348,10 @@ final class ProductEditViewModel: ObservableObject {
         if let t = dec(priceOld), Money.strict(t) == nil {
             error = "Старая цена — сумма, например 1500 или 99,90"; return false
         }
+        // А1328: закупочная цена — сумма с копейками (пусто — очистить).
+        if let t = dec(purchasePrice), Money.strict(t) == nil {
+            error = "Закупочная цена — сумма, например 120 или 45,50"; return false
+        }
         for (raw, label) in [(priceOld, "Старая цена"), (weight, "Вес"), (calories, "Калории"),
                              (proteins, "Белки"), (fats, "Жиры"), (carbs, "Углеводы")] {
             if let t = dec(raw), Money.strict(t, maxFraction: 3) == nil {
@@ -368,6 +386,12 @@ final class ProductEditViewModel: ObservableObject {
         ]
         // Ключ — только если сервер прислал поле или продавец трогал блок (иначе его нет совсем).
         if let tiersBody = tiersBody { fields["price_tiers"] = tiersBody }
+        // А1328: закупочная цена — ключ только при изменении и праве «Цены»; очищенное поле — явный null.
+        let newPurchase: Decimal? = dec(purchasePrice).flatMap { Money.strict($0) }
+        let oldPurchase: Decimal? = dec(purchaseLoaded).flatMap { Money.strict($0) }
+        if newPurchase != oldPurchase && Session.shared.can("products.price") {
+            if let np = newPurchase { fields["purchase_price"] = "\(np)" } else { fields["purchase_price"] = NSNull() }
+        }
         // ВВ (А819): скрыт модератором — ключ статуса не шлём совсем (не null): сервер оставит hidden,
         // а остальные поля сохранит.
         if Bb.statusForSave(hidden: status == "hidden", moderationHidden: moderationHidden) == nil {
@@ -380,6 +404,7 @@ final class ProductEditViewModel: ObservableObject {
             let body = fields.mapValues { v -> Any? in v ?? NSNull() }
             guard let id = productId else { return await create(body) }
             try await API.shared.saveProduct(id: id, fields: body)
+            purchaseLoaded = purchasePrice
             return true
         } catch {
             if let t = Self.tiersText(error) { tiersError = t } else { self.error = error.localizedDescription }
@@ -399,6 +424,7 @@ final class ProductEditViewModel: ObservableObject {
         if !draftDiscarded { ProductDraftStore.save(draft(maybeSent: true), key: draftKey) }
         do {
             let newId = try await API.shared.createProduct(fields: body, keys: idem)
+            purchaseLoaded = purchasePrice
             pendingBody = nil
             unknownOutcome = false
             draftMaybeSent = false
@@ -588,6 +614,8 @@ struct ProductEditView: View {
     private let onClose: (() -> Void)?
     @Environment(\.scenePhase) private var scenePhase
     @State private var confirmClose = false
+    /// А1328: обнуление остатка этого товара.
+    @StateObject private var zero = ZeroStockFlow()
 
     init(productId: Int?, categories: [SellerCategory], onDeleted: (() -> Void)? = nil,
          onClose: (() -> Void)? = nil, initialBarcode: String? = nil) {
@@ -626,6 +654,7 @@ struct ProductEditView: View {
                 if phase != .active { vm.persistDraftIfNeeded() }
             }
             .onDisappear { vm.persistDraftIfNeeded() }
+            .zeroStockAlerts(zero, onDone: { Task { await vm.refreshStock() } })
     }
 
     private var closeTitle: String {
@@ -764,6 +793,13 @@ struct ProductEditView: View {
                         .disabled(!canEditPrice)
                     TextField("Старая цена (зачёркнутая), ₽", text: $vm.priceOld).keyboardType(.decimalPad)
                         .disabled(!canEditPrice)
+                    // А1328: закупочная цена — для наценки и учёта; приход обновляет её сам.
+                    TextField("Закупочная цена, ₽", text: $vm.purchasePrice).keyboardType(.decimalPad)
+                        .disabled(!canEditPrice)
+                    if let pl = PurchaseMath.listLine(price: Money.strict(vm.price.replacingOccurrences(of: ",", with: ".")),
+                                                      purchase: Money.strict(vm.purchasePrice.replacingOccurrences(of: ",", with: "."))) {
+                        Text(verbatim: pl).font(.caption).foregroundColor(Brand.muted)
+                    }
                 } header: {
                     Text("Цена")
                 } footer: {
@@ -811,6 +847,7 @@ struct ProductEditView: View {
             .disabled(vm.isSaving || vm.unknownOutcome)
 
             if vm.productId != nil {
+                stockSection
                 photosSection
                 modifiersSection
             } else {
@@ -925,6 +962,30 @@ struct ProductEditView: View {
 
     /// Новый товар без права «Цены» — сохранить нельзя (сервер ответит 403).
     private var createLocked: Bool { vm.productId == nil && !canEditPrice }
+
+    /// А1328: остаток и «Обнулить» (документом «Инвентаризация» факт 0; витрина — правкой остатка).
+    @ViewBuilder
+    private var stockSection: some View {
+        if vm.type == "product", let q = vm.stockQty, let id = vm.productId,
+           Session.shared.can("products") || Session.shared.can("documents.post") {
+            Section("Остаток") {
+                HStack {
+                    Text(verbatim: stockText(q))
+                    Spacer()
+                    Button("Обнулить", role: .destructive) {
+                        Task { await zero.start(ids: [id]) }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(zero.busy || q == 0 || vm.isSaving)
+                }
+            }
+        }
+    }
+
+    private func stockText(_ q: Decimal) -> String {
+        let u = vm.unit.trimmingCharacters(in: .whitespaces)
+        return "Сейчас: " + QtyFmt.qty(q) + " " + (u.isEmpty ? "шт" : u)
+    }
 
     /// O1: «Оптовые цены». Право «Цены» — как у поля цены.
     private var wholesaleSection: some View {

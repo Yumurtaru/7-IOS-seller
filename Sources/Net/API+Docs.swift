@@ -45,6 +45,7 @@ extension API {
                         supplierId: Int?, comment: String?, post: Bool,
                         items: [DocItemDraft],
                         supplierDocNo: String? = nil, supplierDocDate: String? = nil,
+                        docDate: String? = nil,
                         keys: IdempotencyKeys? = nil) async throws -> DocCreateAck {
         var body: [String: Any?] = [
             "type": type.rawValue,
@@ -59,6 +60,8 @@ extension API {
         // заданы; иначе ключей нет, и документ уходит как раньше.
         if let supplierDocNo, !supplierDocNo.isEmpty { body["supplier_doc_no"] = supplierDocNo }
         if let supplierDocDate, !supplierDocDate.isEmpty { body["supplier_doc_date"] = supplierDocDate }
+        // А1328: дата документа — только если пользователь её менял.
+        if let docDate, !docDate.isEmpty { body["doc_date"] = docDate }
         // self обязателен: у метода есть параметр post: Bool, и без него
         // имя post разрешается в этот параметр, а не в метод запроса.
         // П-27.14: ключ повтора — повторное «Создать» после обрыва без дубля документа.
@@ -77,6 +80,39 @@ extension API {
     /// (А316) — становится cancelled без движений ({cancelled, draft}).
     func cancelDocument(id: Int) async throws -> DocPostAck {
         try await post("api/seller/stock-documents/\(id)/cancel", as: DocPostAck.self)
+    }
+
+    /// А1328: правка ПРОВЕДЁННОГО документа одной операцией (распровести → записать → провести).
+    /// Тело — как у PUT черновика; ключи только те, что заданы. Строки собираем вручную
+    /// (см. createDocument). Отказ — APIDetailedError (409: документ остался прежним).
+    func repostDocument(id: Int, items: [DocItemDraft]?, comment: String?, supplierId: Int?,
+                        warehouseId: Int?, warehouseToId: Int?,
+                        supplierDocNo: String?, supplierDocDate: String?, docDate: String?,
+                        keys: IdempotencyKeys? = nil) async throws -> RepostResult {
+        var body: [String: Any?] = [:]
+        if let items { body["items"] = items.map { $0.payload } }
+        if let comment { body["comment"] = comment }
+        if let supplierId, supplierId > 0 { body["supplier_id"] = supplierId }
+        if let warehouseId, warehouseId > 0 { body["warehouse_id"] = warehouseId }
+        if let warehouseToId, warehouseToId > 0 { body["warehouse_to_id"] = warehouseToId }
+        if let supplierDocNo { body["supplier_doc_no"] = supplierDocNo }
+        if let supplierDocDate { body["supplier_doc_date"] = supplierDocDate }
+        if let docDate, !docDate.isEmpty { body["doc_date"] = docDate }
+        return try await postKeyed("api/seller/stock-documents/\(id)/repost", body: body,
+                                   as: RepostResult.self, detailed: true, keys: keys)
+    }
+
+    /// А1328: обнуление остатков (одного или нескольких товаров). dryRun — только расчёт,
+    /// ничего не меняется. Реальный запрос идёт с Idempotency-Key (ключи экрана: один на
+    /// действие, тот же при повторе после обрыва). warehouse_id не отправляем — все склады.
+    func zeroStock(productIds: [Int], dryRun: Bool, keys: IdempotencyKeys?) async throws -> ZeroStockResult {
+        var body: [String: Any?] = ["product_ids": productIds]
+        if dryRun { body["dry_run"] = true }
+        if dryRun {
+            return try await post("api/seller/products/zero-stock", body: body, as: ZeroStockResult.self)
+        }
+        return try await postKeyed("api/seller/products/zero-stock", body: body,
+                                   as: ZeroStockResult.self, keys: keys)
     }
 
     func duplicateDocument(id: Int) async throws -> DocCreateAck {

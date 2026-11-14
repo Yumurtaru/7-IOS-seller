@@ -10,7 +10,7 @@ import SwiftUI
 
 /// АY: быстрые фильтры списка товаров (routes/seller_products.php, GET /api/seller/products).
 enum ProductQuickFilter: String, CaseIterable, Identifiable {
-    case avail, stopped, nophoto, nocat, lowstock
+    case avail, stopped, nophoto, nocat, lowstock, nopurchase
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -19,6 +19,7 @@ enum ProductQuickFilter: String, CaseIterable, Identifiable {
         case .nophoto:  return "Без фото"
         case .nocat:    return "Без категории"
         case .lowstock: return "Мало на складе"
+        case .nopurchase: return "Без закупочной цены"
         }
     }
     /// Параметр запроса: все — «=1» (avail=1 — в наличии).
@@ -90,6 +91,8 @@ final class ProductsViewModel: ObservableObject {
     }
     /// Сервер подтвердил, что знает новые фильтры (поля stop_until/category_id в ответе).
     @Published private(set) var knowsFilters = false
+    /// А1328: сервер знает закупочную цену (ключ purchase_price у позиций) — чип «Без закупочной цены».
+    @Published private(set) var knowsPurchase = false
     @Published var actionError: String?
 
     // Режим выбора (bulk)
@@ -159,6 +162,7 @@ final class ProductsViewModel: ObservableObject {
             let res = try await API.shared.products(category: categoryFilter, status: statusFilter,
                                                     q: search, page: 1, extra: extraQuery)
             guard myGen == gen else { return }
+            if res.knowsPurchase { knowsPurchase = true }
             if dropUnknownFilters(res) { return }
             if keepPages && page > 1 && key == pagesKey {
                 // Перечитываем все загруженные страницы: склейка «новая первая +
@@ -352,6 +356,8 @@ struct ProductsView: View {
     @State private var confirmBulkDelete = false
     /// Массовая правка (волна М1): id выбранных на момент открытия; nil — экран закрыт.
     @State private var bulkEditIds: [Int]?
+    /// А1328: обнуление остатка выбранных товаров.
+    @StateObject private var zero = ZeroStockFlow()
 
     var body: some View {
         NavigationStack {
@@ -455,6 +461,11 @@ struct ProductsView: View {
                         }
                 }
             }
+            .zeroStockAlerts(zero, onDone: {
+                vm.selecting = false
+                vm.selected = []
+                Task { await vm.reload() }
+            })
             .confirmationDialog("Удалить выбранные товары (\(vm.selected.count)) безвозвратно?",
                                 isPresented: $confirmBulkDelete, titleVisibility: .visible) {
                 Button("Удалить", role: .destructive) { Task { await vm.bulk(action: "delete", value: nil) } }
@@ -523,7 +534,7 @@ struct ProductsView: View {
                 }
                 // АY: быстрые фильтры — только когда сервер их знает (сайт А616).
                 if vm.knowsFilters {
-                    ForEach(ProductQuickFilter.allCases) { f in
+                    ForEach(ProductQuickFilter.allCases.filter { $0 != .nopurchase || vm.knowsPurchase }) { f in
                         FilterChip(title: f.title, selected: vm.quickFilter == f) {
                             vm.quickFilter = vm.quickFilter == f ? nil : f
                         }
@@ -752,6 +763,9 @@ struct ProductsView: View {
                             Button("В наличии") { Task { await vm.bulk(action: "avail", value: "1") } }
                         }
                         Button("Скрыть") { Task { await vm.bulk(action: "status", value: "hidden") } }
+                        // А1328: остаток -> 0 документом «Инвентаризация» (сначала расчёт и вопрос).
+                        Button("Обнулить остаток") { Task { await zero.start(ids: vm.selected.sorted()) } }
+                            .disabled(zero.busy)
                         Menu("В категорию") {
                             ForEach(vm.categories.treeOrdered(), id: \.cat.id) { row in
                                 Button(row.cat.treeLabel(depth: row.depth)) {
@@ -828,6 +842,10 @@ struct ProductRow: View {
                 if let w = Wholesale.listLabel(tiers: product.priceTiers, retail: product.price, unit: product.unit) {
                     Text(w).font(.caption2).foregroundColor(Brand.muted)
                 }
+                // А1328: «закуп. 45,50 ₽ · нац. 32%» — только при закупочной больше нуля.
+                if let pl = PurchaseMath.listLine(price: product.price, purchase: product.purchasePrice) {
+                    Text(verbatim: pl).font(.caption2).foregroundColor(Brand.muted)
+                }
                 HStack(spacing: 6) {
                     if let cat = product.category, !cat.isEmpty {
                         Text(cat).font(.caption2).foregroundColor(Brand.muted)
@@ -852,6 +870,31 @@ struct ProductRow: View {
             Spacer()
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// А1328: наценка от закупочной цены: (price - purchase) / purchase * 100.
+enum PurchaseMath {
+    /// Целые проценты; nil, если закупочной нет или она не больше нуля.
+    static func markupPercent(price: Decimal?, purchase: Decimal?) -> Int? {
+        guard let price, let purchase, purchase > 0 else { return nil }
+        var raw: Decimal = (price - purchase) / purchase * 100
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &raw, 0, .plain)
+        return NSDecimalNumber(decimal: rounded).intValue
+    }
+
+    /// «+32%» без плюса, отрицательная — «−5%» (настоящий минус).
+    static func percentText(_ p: Int) -> String {
+        p < 0 ? "\u{2212}\(-p)%" : "\(p)%"
+    }
+
+    /// «закуп. 45,50 ₽ · нац. 32%»; nil — закупочной нет (строка не показывается).
+    static func listLine(price: Decimal?, purchase: Decimal?) -> String? {
+        guard let purchase, purchase > 0 else { return nil }
+        var s = "закуп. " + Money.rub(purchase)
+        if let p = markupPercent(price: price, purchase: purchase) { s += " · нац. " + percentText(p) }
+        return s
     }
 }
 
