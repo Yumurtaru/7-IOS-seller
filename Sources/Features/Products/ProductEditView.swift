@@ -70,6 +70,9 @@ final class ProductEditViewModel: ObservableObject {
 
     @Published var state: LoadState = .idle
     @Published var error: String?
+    /// Привязка/отвязка группы добавок в пути (защита от двойного нажатия) и сообщение об успехе.
+    @Published var modBusy = false
+    @Published var modNotice: String?
     @Published var isSaving = false
     @Published var isUploading = false
     @Published var aiInfo: String?
@@ -1029,7 +1032,7 @@ struct ProductEditView: View {
         Section("Модификаторы") {
             if vm.modifierGroups.isEmpty {
                 // Раздел «Модификаторы» в приложении уже есть — не отправляем на сайт.
-                Text("Нет групп модификаторов. Добавить группу можно в разделе «Ещё» → «Модификаторы».")
+                Text("Нет групп модификаторов. Добавьте готовую группу ниже или создайте новую в разделе «Ещё» → «Модификаторы».")
                     .font(.caption).foregroundColor(Brand.muted)
             } else {
                 ForEach(vm.modifierGroups) { group in
@@ -1052,9 +1055,14 @@ struct ProductEditView: View {
                                 }
                             }
                         }
+                        ProductModifierDetachButton(vm: vm, group: group)
                     }
                     .padding(.vertical, 2)
                 }
+            }
+            ProductModifierAttachButton(vm: vm)
+            if let note = vm.modNotice {
+                Text(note).font(.caption).foregroundColor(Brand.green)
             }
         }
     }

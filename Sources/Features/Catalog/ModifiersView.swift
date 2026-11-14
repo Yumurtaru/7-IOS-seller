@@ -142,7 +142,7 @@ struct ModifiersView: View {
                         Button(role: .destructive) {
                             groupToDelete = g
                         } label: {
-                            Text("Удалить группу").font(.caption)
+                            Text("Удалить группу совсем").font(.caption)
                         }
                     }
                 }
@@ -166,13 +166,13 @@ struct ModifiersView: View {
             titleVisibility: .visible,
             presenting: groupToDelete
         ) { g in
-            Button("Удалить группу", role: .destructive) {
+            Button("Удалить группу совсем", role: .destructive) {
                 groupToDelete = nil
                 Task { await vm.deleteGroup(g) }
             }
             Button("Отмена", role: .cancel) { groupToDelete = nil }
         } message: { _ in
-            Text("Удалятся все варианты группы, у товаров она пропадёт.")
+            Text("Группа удалится у всех товаров. Удалятся все варианты группы.")
         }
         // Не только .idle: ушли с экрана посреди первой загрузки — она отменилась,
         // состояние осталось .loading, и при возврате спиннер висел навсегда.
