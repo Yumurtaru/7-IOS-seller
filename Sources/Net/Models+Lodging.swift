@@ -336,6 +336,11 @@ struct LodgingBooking: Decodable, Identifiable, Hashable {
     @LenientDecimal var total: Decimal?
     @LenientDecimal var prepay: Decimal?
     @LenientDecimal var touristTax: Decimal?
+    // Новое (аддитивно, старый сервер не присылает -> nil): оплачено с учётом кассы,
+    // остаток и неоплаченные продажи кассы «на номер».
+    @LenientDecimal var paid: Decimal?
+    @LenientDecimal var due: Decimal?
+    @LenientDecimal var folioDue: Decimal?
     let status: String?
     let statusLabel: String?
     let guestName: String?
@@ -356,6 +361,8 @@ struct LodgingBooking: Decodable, Identifiable, Hashable {
         case dateFrom = "date_from"
         case dateTo = "date_to"
         case touristTax = "tourist_tax"
+        case paid, due
+        case folioDue = "folio_due"
         case statusLabel = "status_label"
         case guestName = "guest_name"
         case guestPhone = "guest_phone"

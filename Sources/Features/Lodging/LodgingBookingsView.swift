@@ -338,6 +338,9 @@ private struct LodgingBookingCard: View {
                     .font(.caption)
                     .foregroundColor(booking.paymentStatus == "paid" ? Brand.green : Brand.amber)
             }
+            if let money = Self.moneyLine(booking) {
+                Text(money).font(.caption).foregroundColor(Brand.muted)
+            }
             // Паритет с Android: номер заказа брони и статус его оплаты — по нему
             // бронь ищут в «Заказах» и сверяют оплату.
             if let n = booking.dailyNumber {
@@ -390,6 +393,15 @@ private struct LodgingBookingCard: View {
         guard LodgingBookingCard.isYmd(from), let opens = LodgingBookingCard.shiftYmd(from, by: -1) else { return nil }
         let today = max(srv, DateFmt.ymdMoscow(Date()))
         return opens > today ? opens : nil
+    }
+
+    /// «оплачено N ₽, остаток M ₽, доп. услуги K ₽» — части только при наличии поля.
+    private static func moneyLine(_ b: LodgingBooking) -> String? {
+        var parts: [String] = []
+        if let p = b.paid { parts.append("оплачено \(Money.rub(p))") }
+        if let d = b.due, d > 0 { parts.append("остаток \(Money.rub(d))") }
+        if let f = b.folioDue, f > 0 { parts.append("доп. услуги \(Money.rub(f))") }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 
     /// «Заезд с 14:00, выезд до 12:00» (check_in_from / check_out_until; секунды
