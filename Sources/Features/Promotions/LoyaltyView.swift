@@ -34,6 +34,7 @@ final class LoyaltyViewModel: ObservableObject {
             limitText = lp.pointsRedeemMaxPercent.map { "\($0)" } ?? ""
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

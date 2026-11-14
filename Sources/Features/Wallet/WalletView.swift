@@ -88,6 +88,7 @@ final class WalletViewModel: ObservableObject {
             state = .loaded
             refreshError = nil
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             // Раньше при показанных данных ошибка не выводилась нигде, и

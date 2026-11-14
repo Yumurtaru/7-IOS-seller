@@ -26,6 +26,7 @@ final class BoostViewModel: ObservableObject {
             info = try await API.shared.boostInfo()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -319,6 +320,7 @@ private struct BoostProductPicker: View {
             items = page.items
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard asked == query else { return }
             state = .failed(error.localizedDescription)

@@ -19,7 +19,7 @@ final class IngredientsViewModel: ObservableObject {
     func load() async {
         if items.isEmpty { state = .loading }
         do { items = try await API.shared.ingredients(); state = .loaded }
-        catch is CancellationError {}
+        catch is CancellationError { if state == .loading { state = .idle } }   // отмена: спиннер не должен висеть
         catch { state = .failed(error.localizedDescription) }
     }
 

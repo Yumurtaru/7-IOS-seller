@@ -133,6 +133,7 @@ final class RevalListViewModel: ObservableObject {
             items = fresh
             state = .loaded
         } catch is CancellationError {
+            if my == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == loadGen else { return }
             state = .failed(error.localizedDescription)
@@ -312,6 +313,7 @@ final class RevEditViewModel: ObservableObject {
             dirty = false
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -890,6 +892,7 @@ final class MarkupCategoriesViewModel: ObservableObject {
             rows = r
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -1081,6 +1084,7 @@ private struct PriceLogPane: View {
             rows = r
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

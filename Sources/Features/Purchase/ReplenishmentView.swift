@@ -63,6 +63,7 @@ final class ReplenishmentViewModel: ObservableObject {
                 startPolling()
             }
         } catch is CancellationError {
+            if my == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == loadGen else { return }
             let text = SellerNewErrors.text(error)

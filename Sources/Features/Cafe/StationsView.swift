@@ -35,6 +35,7 @@ final class StationsViewModel: ObservableObject {
             state = .loaded
             error = nil   // старая ошибка обновления не висит после удачного повтора
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if stations.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }

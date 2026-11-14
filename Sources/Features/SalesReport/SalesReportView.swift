@@ -71,7 +71,7 @@ final class SalesReportViewModel: ObservableObject {
             if q != shownQuery { data = nil; shownQuery = nil }
             state = .failed(text)
         case .cancelled:
-            break
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         }
     }
 

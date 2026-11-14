@@ -168,6 +168,7 @@ final class OrdersViewModel: ObservableObject {
             // «Сначала старые» — тоже: новый заказ окажется в конце списка, не на виду.
             if dateFilter == nil && appliedSearch.isEmpty && sentSort == .new { NewOrderPoller.shared.acknowledge() }
         } catch is CancellationError {
+            if myGen == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == gen else { return }
             state = .failed(error.localizedDescription)

@@ -399,6 +399,7 @@ final class PosReceiptViewModel: ObservableObject {
             receipt = try await API.shared.posReceipt(id: id)
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

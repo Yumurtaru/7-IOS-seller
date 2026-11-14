@@ -30,6 +30,7 @@ final class PurchaseOrdersViewModel: ObservableObject {
             orders = list
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             // Ошибка по прежнему чипу не должна ложиться на новый.
             guard asked == status else { return }
@@ -143,6 +144,7 @@ final class PurchaseOrderDetailViewModel: ObservableObject {
             detail = try await API.shared.purchaseOrder(id: id)
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

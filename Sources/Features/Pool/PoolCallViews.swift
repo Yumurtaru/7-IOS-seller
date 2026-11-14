@@ -977,7 +977,7 @@ struct PoolCallSheet: View {
         }
         if q.cargoSupported, let s = q.cargo?.suggestedFee, s > 0 {
             var t = "Подсказка для выбранной машины"
-            if let km = q.cargo?.distanceKm, km > 0 { t += " (≈ \(Int(km.rounded())) км)" }
+            if let km = q.cargo?.distanceKm, km > 0, km < 1e6 { t += " (≈ \(Int(km.rounded())) км)" }
             return t + ", до " + PoolCargoFmt.rub(q.cargo?.maxFee) + ". Можно предложить больше — быстрее возьмут."
         }
         return "От " + Money.rub(q.minFee) + " до " + Money.rub(q.maxFee)

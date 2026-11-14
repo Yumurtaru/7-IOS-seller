@@ -26,6 +26,7 @@ final class TablesViewModel: ObservableObject {
             // после удачного повтора — казалось, что список всё ещё старый.
             error = nil
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if tables.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }

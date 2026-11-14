@@ -29,6 +29,8 @@ final class SlotsViewModel: ObservableObject {
             services = try await API.shared.services()
             if selectedServiceId == nil { selectedServiceId = services.first?.serviceId }
             if services.isEmpty { state = .loaded }
+        } catch is CancellationError {
+            if state == .loading && services.isEmpty { state = .idle }   // ушли с экрана — не «ошибка»
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -47,6 +49,7 @@ final class SlotsViewModel: ObservableObject {
             guard my == slotsGen else { return }
             slots = fresh; state = .loaded
         } catch is CancellationError {
+            if my == slotsGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == slotsGen else { return }
             state = .failed(error.localizedDescription)

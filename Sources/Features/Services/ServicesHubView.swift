@@ -86,6 +86,7 @@ final class ServicesViewModel: ObservableObject {
             categories = (try? await API.shared.categories()) ?? categories
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

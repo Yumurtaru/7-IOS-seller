@@ -25,6 +25,7 @@ final class KycViewModel: ObservableObject {
             state = .loaded
             error = nil
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             // Раньше при данных на экране ошибка не показывалась нигде, и
             // прежние проценты выглядели свежими.

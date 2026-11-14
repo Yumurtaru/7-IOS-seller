@@ -89,6 +89,7 @@ final class ReturnsViewModel: ObservableObject {
             // Бейдж «возвраты ждут» берётся из /shops — обновляем его вместе со списком.
             Task { await Session.shared.refreshShops() }
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)

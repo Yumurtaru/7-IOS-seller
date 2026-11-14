@@ -100,6 +100,7 @@ final class ShopSettingsViewModel: ObservableObject {
             state = .loaded
             await loadTelegram()
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

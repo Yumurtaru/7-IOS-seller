@@ -107,6 +107,7 @@ final class AnalyticsExtraModel<T>: ObservableObject {
             unavailable = false
             state = .loaded
         } catch is CancellationError {
+            if myGen == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch let e as APIDetailedError where e.status == 404 || e.status == 405 {
             guard myGen == gen else { return }
             data = nil

@@ -188,6 +188,7 @@ final class ProductsViewModel: ObservableObject {
             state = .loaded
             settledSearch = searchAtStart
         } catch is CancellationError {
+            if myGen == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == gen else { return }
             state = .failed(error.localizedDescription)

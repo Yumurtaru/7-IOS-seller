@@ -58,6 +58,7 @@ final class DocumentsViewModel: ObservableObject {
             hasMore = more
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)
@@ -337,7 +338,7 @@ final class DocumentDetailViewModel: ObservableObject {
     func load(id: Int) async {
         state = .loading
         do { doc = try await API.shared.document(id: id); state = .loaded }
-        catch is CancellationError {}
+        catch is CancellationError { if state == .loading { state = .idle } }   // отмена: спиннер не должен висеть
         catch { state = .failed(error.localizedDescription) }
     }
 }

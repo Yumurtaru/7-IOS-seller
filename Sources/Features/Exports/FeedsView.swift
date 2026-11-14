@@ -47,6 +47,7 @@ final class FeedsViewModel: ObservableObject {
             netWait = false
             if anyBuilding { startPolling() } else { stopPolling(); pollBegan = nil }
         } catch is CancellationError {
+            if my == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == loadGen else { return }
             let text = ExpLogic.errorText(error)

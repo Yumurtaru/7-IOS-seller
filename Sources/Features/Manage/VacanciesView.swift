@@ -25,6 +25,7 @@ final class VacanciesViewModel: ObservableObject {
             // строка прошлого сбоя висела над свежим списком навсегда.
             error = nil
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if items.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }
@@ -350,6 +351,7 @@ final class ApplicationsViewModel: ObservableObject {
             // (setStatus ставит свою ошибку уже после перечитывания).
             error = nil
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if items.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }

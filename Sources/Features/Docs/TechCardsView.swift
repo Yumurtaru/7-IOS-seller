@@ -25,6 +25,7 @@ final class TechCardsViewModel: ObservableObject {
             modifiers = try await m
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -176,6 +177,7 @@ final class TechCardEditViewModel: ObservableObject {
             }
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

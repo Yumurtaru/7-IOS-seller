@@ -40,6 +40,7 @@ final class BookingJournalViewModel: ObservableObject {
             // Выбранной колонки в новом ответе нет (день другой) — «Все».
             if !colFilter.isEmpty, !fresh.columns.contains(where: { $0.key == colFilter }) { colFilter = "" }
         } catch is CancellationError {
+            if my == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == gen else { return }
             state = .failed(error.localizedDescription)

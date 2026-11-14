@@ -88,6 +88,7 @@ final class ValuationViewModel: ObservableObject {
             moreError = nil
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)
@@ -235,6 +236,7 @@ final class TurnoverViewModel: ObservableObject {
             data = fresh
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)
@@ -338,6 +340,7 @@ final class WriteoffViewModel: ObservableObject {
             data = fresh
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)
@@ -450,6 +453,7 @@ final class ReorderViewModel: ObservableObject {
             report = fresh
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)

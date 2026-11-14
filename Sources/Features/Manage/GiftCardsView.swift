@@ -30,6 +30,7 @@ final class GiftCardsViewModel: ObservableObject {
             // ошибка прошлого обновления висела над свежим списком.
             error = nil
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if items.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }

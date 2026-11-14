@@ -28,6 +28,7 @@ final class ModifiersViewModel: ObservableObject {
             products = try await p
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

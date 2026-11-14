@@ -21,6 +21,7 @@ final class LodgingLongViewModel: ObservableObject {
             items = try await API.shared.lodgingLongRequests()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if items.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }

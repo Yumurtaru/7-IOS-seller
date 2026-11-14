@@ -170,6 +170,7 @@ final class OcrHomeViewModel: ObservableObject {
             page = 1
             state = .loaded
         } catch is CancellationError {
+            if my == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == gen else { return }
             state = .failed(SellerNewErrors.text(error))
@@ -549,6 +550,7 @@ final class OcrReviewViewModel: ObservableObject {
             job = j
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if job == nil { state = .failed(SellerNewErrors.text(error)) }
             else { self.error = SellerNewErrors.text(error) }

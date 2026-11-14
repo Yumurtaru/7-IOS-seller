@@ -65,6 +65,7 @@ final class EmployeesViewModel: ObservableObject {
             roles = freshRoles ?? roles
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)

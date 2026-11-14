@@ -23,6 +23,7 @@ final class WaitlistViewModel: ObservableObject {
             alerts = res.priceAlerts ?? []
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -113,6 +114,7 @@ final class ReservationsViewModel: ObservableObject {
             items = fresh
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)

@@ -138,7 +138,8 @@ enum LodgingFormat {
     /// Процент без лишнего «.0»: 12.5 → «12,5», 30 → «30».
     static func pct(_ v: Double?) -> String {
         let d = v ?? 0
-        if d == d.rounded() { return String(Int(d)) }
+        guard d.isFinite else { return "0" }   // Int(∞/NaN) роняет приложение
+        if d == d.rounded(), abs(d) < 1e15 { return String(Int(d)) }
         var t = String(format: "%.2f", d)
         while t.hasSuffix("0") { t.removeLast() }
         return t.replacingOccurrences(of: ".", with: ",")
@@ -164,7 +165,7 @@ enum LodgingFormat {
     static func shortPrice(_ v: Decimal?) -> String {
         guard let v = v else { return "—" }
         let d = NSDecimalNumber(decimal: v).doubleValue
-        if d <= 0 { return "—" }
+        if !(d > 0) || d >= 1e15 { return "—" }   // NaN/огромное число: Int(...) ниже упал бы
         if d < 1000 { return String(Int(d)) }
         let k = d / 1000
         // Запятая — десятичный разделитель в русском интерфейсе.

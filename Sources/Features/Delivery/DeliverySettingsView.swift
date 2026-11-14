@@ -23,6 +23,7 @@ final class DeliverySettingsViewModel: ObservableObject {
             data = try await API.shared.deliverySettings()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

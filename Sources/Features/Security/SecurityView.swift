@@ -61,6 +61,7 @@ final class SecurityAlertsViewModel: ObservableObject {
             data = try await API.shared.securityAlerts()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -149,6 +150,7 @@ final class SecurityFeedViewModel: ObservableObject {
             moreError = nil
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard key == "\(days)|\(action)" else { return }
             if shownKey != key { feed = nil }
@@ -321,6 +323,7 @@ final class SecurityCashiersViewModel: ObservableObject {
             shownDays = asked
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard asked == days else { return }
             if shownDays != asked { report = nil }
@@ -402,6 +405,7 @@ final class SecurityStatsViewModel: ObservableObject {
             }
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard asked == days else { return }
             if shownDays != asked { stats = nil }

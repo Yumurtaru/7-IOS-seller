@@ -86,6 +86,7 @@ final class PoolCallsViewModel: ObservableObject {
             canLoadMore = list.count >= Self.perPage
             state = .loaded
         } catch is CancellationError {
+            if my == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == gen else { return }
             state = .failed(error.localizedDescription)
@@ -133,6 +134,7 @@ final class PoolMoneyViewModel: ObservableObject {
             couriers = try await API.shared.poolCouriers()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -604,6 +606,7 @@ struct PoolCallDetailView: View {
             call = fresh
             state = .loaded
         } catch is CancellationError {
+            if my == gen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard my == gen else { return }
             state = .failed(error.localizedDescription)
@@ -841,6 +844,7 @@ struct PoolLedgerView: View {
             canMore = list.count >= Self.perPage
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

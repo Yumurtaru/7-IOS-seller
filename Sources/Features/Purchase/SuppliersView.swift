@@ -18,6 +18,7 @@ final class SuppliersViewModel: ObservableObject {
             suppliers = try await API.shared.suppliers()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -286,6 +287,7 @@ final class SupplierDetailViewModel: ObservableObject {
             prices = (try? await API.shared.supplierPrices(supplierId: id)) ?? []
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

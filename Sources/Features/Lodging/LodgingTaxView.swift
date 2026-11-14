@@ -40,6 +40,7 @@ final class LodgingTaxViewModel: ObservableObject {
             loaded = true
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
             // Форма без этого текста выглядела как «налог не настроен», и
@@ -49,7 +50,8 @@ final class LodgingTaxViewModel: ObservableObject {
     }
 
     private func trimZeros(_ v: Double) -> String {
-        v == v.rounded() ? String(Int(v)) : String(v)
+        guard v.isFinite, abs(v) < 1e15 else { return "" }   // Int(∞/огромное) роняет приложение
+        return v == v.rounded() ? String(Int(v)) : String(v)
     }
 
     func save() async {

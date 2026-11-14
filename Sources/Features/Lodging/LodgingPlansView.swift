@@ -25,6 +25,7 @@ final class LodgingPlansViewModel: ObservableObject {
             items = try await API.shared.lodgingRatePlans(unitId: unitId)
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             if items.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }
@@ -48,7 +49,14 @@ final class LodgingPlansViewModel: ObservableObject {
         }
     }
 
+    /// Тумблер в пути: быстрые нажатия слали несколько PUT подряд, и порядок
+    /// их выполнения на сервере мог вернуть тариф в прежнее состояние.
+    private var togglingIds: Set<Int> = []
+
     func setActive(_ plan: LodgingRatePlan, _ active: Bool) async {
+        guard !togglingIds.contains(plan.id) else { return }
+        togglingIds.insert(plan.id)
+        defer { togglingIds.remove(plan.id) }
         _ = await save(id: plan.id, body: ["is_active": active ? 1 : 0])
     }
 

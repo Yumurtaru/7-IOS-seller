@@ -222,7 +222,7 @@ struct PoolCargoPicker: View {
                 }
             }
             if state.destCityId != nil, let e = err("dest_city_id") { errorText(e) }
-            if state.destCityId != nil, quoteFresh, let km = cargo?.distanceKm, km > 0, err("dest_city_id") == nil {
+            if state.destCityId != nil, quoteFresh, let km = cargo?.distanceKm, km > 0, km < 1e6, err("dest_city_id") == nil {
                 Text("≈ \(Int(km.rounded())) км по дороге").font(.subheadline).foregroundColor(Brand.text)
             }
         }

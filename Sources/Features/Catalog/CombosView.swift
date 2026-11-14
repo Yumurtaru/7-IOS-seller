@@ -27,6 +27,7 @@ final class CombosViewModel: ObservableObject {
             products = try await p
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -119,6 +120,7 @@ final class ComboItemsViewModel: ObservableObject {
             items = try await API.shared.comboItems(comboId: comboId)
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

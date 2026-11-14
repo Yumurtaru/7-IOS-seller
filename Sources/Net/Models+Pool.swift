@@ -274,7 +274,7 @@ struct PoolCall: Decodable, Identifiable, Hashable {
         if let l = loaders, l > 0 { p.append("грузчики: \(l)") }
         if isIntercity {
             var s = "межгород → " + (destCity ?? "")
-            if let km = distanceKm, km > 0 { s += " (≈ \(Int(km.rounded())) км)" }
+            if let km = distanceKm, km > 0, km < 1e6 { s += " (≈ \(Int(km.rounded())) км)" }
             p.append(s)
         }
         return p.joined(separator: " · ")

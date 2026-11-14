@@ -46,6 +46,7 @@ final class LodgingUnitsViewModel: ObservableObject {
                 amenities = (try? await API.shared.lodgingAmenities()) ?? []
             }
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

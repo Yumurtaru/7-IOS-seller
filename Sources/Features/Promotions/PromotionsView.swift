@@ -27,6 +27,7 @@ final class PromotionsViewModel: ObservableObject {
             items = try await API.shared.promotions()
             state = .loaded
         } catch is CancellationError {
+            if state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             state = .failed(error.localizedDescription)
         }

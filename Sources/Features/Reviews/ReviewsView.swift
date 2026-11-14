@@ -33,6 +33,7 @@ final class ReviewsViewModel: ObservableObject {
             items = fresh
             state = .loaded
         } catch is CancellationError {
+            if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)

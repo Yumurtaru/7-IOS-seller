@@ -51,6 +51,7 @@ enum Wholesale {
 
     /// 25 → «25», 2.5 → «2,5» (до 3 знаков).
     static func qtyText(_ v: Double) -> String {
+        guard v.isFinite, abs(v) < 1e15 else { return "—" }   // Int(∞/огромное) роняет приложение
         if abs(v - v.rounded()) < 1e-9 { return String(Int(v.rounded())) }
         return qtyFormatter.string(from: NSNumber(value: v)) ?? "\(v)"
     }
