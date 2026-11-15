@@ -32,28 +32,33 @@ final class CategoriesViewModel: ObservableObject {
     /// sortOrder nil — порядок не задан: сервер ставит категорию в конец уровня.
     /// Возвращает nil при успехе, иначе текст ошибки сервера (показывается в форме,
     /// у поля «Родительская категория»; 422 по parent_id приходит текстом сервера).
-    func create(name: String, sortOrder: Int?, parentId: Int) async -> String? {
+    func create(name: String, sortOrder: Int?, parentId: Int, wholesale: [String: Any]? = nil) async -> String? {
         guard !busy else { return "" }   // двойной тап создавал две категории
         busy = true; defer { busy = false }
         do {
             _ = try await API.shared.createCategory(name: name, parentId: parentId > 0 ? parentId : nil,
-                                                    sortOrder: sortOrder)
+                                                    sortOrder: sortOrder, wholesale: wholesale)
             await load()
             return nil
         } catch { return error.localizedDescription }
     }
 
     /// parent: nil — не менялся (ключ не уходит); 0 — «Нет» (JSON null); >0 — id родителя.
-    func rename(_ c: ProductCategory, name: String, sortOrder: Int, parent: Int?) async -> String? {
+    func rename(_ c: ProductCategory, name: String, sortOrder: Int, parent: Int?,
+                wholesale: [String: Any]? = nil) async -> String? {
         guard !busy else { return "" }   // двойной тап — один запрос
         busy = true; defer { busy = false }
         do {
             try await API.shared.updateCategory(id: c.categoryId, name: name, sortOrder: sortOrder,
-                                                setParent: parent != nil, parentId: (parent ?? 0) > 0 ? parent : nil)
+                                                setParent: parent != nil, parentId: (parent ?? 0) > 0 ? parent : nil,
+                                                wholesale: wholesale)
             await load()
             return nil
         } catch { return error.localizedDescription }
     }
+
+    /// А1331: сервер знает про опт категорий (прислал wholesale хотя бы у одной) — в форме новой категории секция есть.
+    var serverHasWholesale: Bool { items.contains { $0.wholesale != nil } }
 
     /// Категории верхнего уровня (кроме самой редактируемой) — варианты родителя.
     func parentOptions(excluding id: Int) -> [ProductCategory] {
@@ -194,6 +199,9 @@ struct CategoriesView: View {
     /// паритет с Android: удаление категории — только после вопроса.
     @State private var deleting: ProductCategory?
 
+    /// А1331: правило опта меняет только сотрудник с правом «Цены» (иначе сервер отвечает 403).
+    private var canEditWholesale: Bool { Session.shared.can("products.price") }
+
     var body: some View {
         List {
             // А65: дерево в порядке витрины, стрелки ↑/↓ и «глаз» прямо в строке.
@@ -231,16 +239,19 @@ struct CategoriesView: View {
                 CategoryEditSheet(title: parent > 0 ? "Новая подкатегория" : "Новая категория",
                                   name: "", sortOrder: nil, initialParent: parent,
                                   parentOptions: vm.parentOptions(excluding: 0), hasChildren: false,
-                                  busy: vm.busy) { name, sort, par in
+                                  busy: vm.busy,
+                                  wholesale: vm.serverHasWholesale ? CategoryWholesale(mode: "inherit", tiers: []) : nil,
+                                  canPrice: canEditWholesale) { name, sort, par, ws in
                     // паритет с Android: порядок у новой категории по умолчанию не задан.
-                    await vm.create(name: name, sortOrder: sort, parentId: par ?? parent)
+                    await vm.create(name: name, sortOrder: sort, parentId: par ?? parent, wholesale: ws)
                 }
             case .edit(let c):
                 CategoryEditSheet(title: "Категория", name: c.name ?? "", sortOrder: c.sortOrder ?? 0,
                                   initialParent: max(0, c.parentId ?? 0),
                                   parentOptions: vm.parentOptions(excluding: c.categoryId),
-                                  hasChildren: vm.hasChildren(c.categoryId), busy: vm.busy) { name, sort, par in
-                    await vm.rename(c, name: name, sortOrder: sort ?? (c.sortOrder ?? 0), parent: par)
+                                  hasChildren: vm.hasChildren(c.categoryId), busy: vm.busy,
+                                  wholesale: c.wholesale, canPrice: canEditWholesale) { name, sort, par, ws in
+                    await vm.rename(c, name: name, sortOrder: sort ?? (c.sortOrder ?? 0), parent: par, wholesale: ws)
                 }
             case .cover(let c):
                 CategoryCoverSheet(category: c) { Task { await vm.load() } }
@@ -287,6 +298,10 @@ struct CategoriesView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(c.name ?? "—").font(.subheadline.weight(.semibold)).foregroundColor(Brand.text)
                     Text("порядок: \(c.sortOrder ?? 0)").font(.caption2).foregroundColor(Brand.muted)
+                    if let wl = CategoryWholesaleLogic.badge(c.wholesale) {
+                        Text(verbatim: wl).font(.caption2.weight(.semibold))
+                            .foregroundColor(c.wholesale?.mode == "rule" ? Brand.green : Brand.muted)
+                    }
                     // Выключенная — бледная и с подписью; её подкатегории
                     // клиенту тоже не видны, даже если включены сами.
                     if c.isActive == false {
@@ -380,15 +395,24 @@ private struct CategoryEditSheet: View {
     let busy: Bool
     /// (название, порядок, родитель). Родитель: nil — не менялся; 0 — «Нет»; >0 — id.
     /// Возвращает nil при успехе или текст ошибки сервера.
-    let onSave: (String, Int?, Int?) async -> String?
+    /// Четвёртый аргумент — ключ wholesale (А1331): nil, если секцию не меняли.
+    let onSave: (String, Int?, Int?, [String: Any]?) async -> String?
+    /// А1331: опт категории от сервера (nil — старый сервер: секцию не показываем) и право «Цены».
+    let wholesale: CategoryWholesale?
+    let canPrice: Bool
+    private let initialWsMode: String
+    private let initialWsKeys: [String]
 
     @State private var parentId: Int
     @State private var fieldError: String?
+    @State private var wsMode: String
+    @State private var wsRows: [CategoryWholesaleLogic.Row]
     @Environment(\.dismiss) private var dismiss
 
     init(title: String, name: String, sortOrder: Int?, initialParent: Int,
          parentOptions: [ProductCategory], hasChildren: Bool, busy: Bool,
-         onSave: @escaping (String, Int?, Int?) async -> String?) {
+         wholesale: CategoryWholesale?, canPrice: Bool,
+         onSave: @escaping (String, Int?, Int?, [String: Any]?) async -> String?) {
         self.title = title
         _name = State(initialValue: name)
         _sortOrder = State(initialValue: sortOrder)
@@ -398,6 +422,108 @@ private struct CategoryEditSheet: View {
         self.busy = busy
         self.onSave = onSave
         _parentId = State(initialValue: initialParent)
+        self.wholesale = wholesale
+        self.canPrice = canPrice
+        let m = CategoryWholesaleLogic.mode(from: wholesale)
+        let r = CategoryWholesaleLogic.rows(from: wholesale)
+        initialWsMode = m
+        initialWsKeys = r.map { $0.key }
+        _wsMode = State(initialValue: m)
+        _wsRows = State(initialValue: r)
+    }
+
+    // ── А1331: опт категории ────────────────────────────────────────────────
+    /// Секция видна, если сервер знает опт категории; без права «Цены» — только для чтения (как в кабинете и Android).
+    private var showWholesale: Bool { wholesale != nil }
+
+    /// Поле ступени по id строки: ForEach($wsRows) с удалением внутри падал на iOS 15–16 («Index out of range»).
+    private func wsBinding(_ id: UUID, _ kp: WritableKeyPath<CategoryWholesaleLogic.Row, String>) -> Binding<String> {
+        Binding(
+            get: { wsRows.first(where: { $0.id == id })?[keyPath: kp] ?? "" },
+            set: { v in
+                if let i = wsRows.firstIndex(where: { $0.id == id }) { wsRows[i][keyPath: kp] = v }
+            }
+        )
+    }
+
+    private var wsChanged: Bool {
+        if wsMode != initialWsMode { return true }
+        return wsMode == CategoryWholesaleLogic.modeRule && wsRows.map { $0.key } != initialWsKeys
+    }
+
+    /// Ошибка ступеней — только когда выбран режим «Скидка от количества».
+    private var wsError: String? {
+        wsMode == CategoryWholesaleLogic.modeRule ? CategoryWholesaleLogic.validate(rows: wsRows) : nil
+    }
+
+    private var isSub: Bool { parentId > 0 }
+
+    private var wsFooterText: String {
+        if wsMode == CategoryWholesaleLogic.modeOff {
+            return "У товаров этой подкатегории опта не будет (кроме своих оптовых цен в карточке товара)."
+        }
+        if wsMode == CategoryWholesaleLogic.modeRule {
+            return "Цена ступени = цена товара минус скидка. Для товаров со своими оптовыми ценами действуют их цены. Штучным товарам порог округляется вверх до целого."
+        }
+        return isSub ? "Действует скидка родительской категории (если она задана)."
+                     : "Опта нет. Свои оптовые цены можно задать в карточке товара."
+    }
+
+    private var wholesaleSection: some View {
+        Section {
+            Picker("Оптовая скидка", selection: $wsMode) {
+                Text(isSub ? "Как у родительской категории" : "Нет опта").tag(CategoryWholesaleLogic.modeInherit)
+                Text("Скидка от количества").tag(CategoryWholesaleLogic.modeRule)
+                if isSub { Text("Без опта (даже если у родительской есть)").tag(CategoryWholesaleLogic.modeOff) }
+            }
+            .disabled(!canPrice)
+            if wsMode == CategoryWholesaleLogic.modeRule {
+                ForEach(wsRows) { row in
+                    HStack(spacing: 6) {
+                        Text("от")
+                        TextField("10", text: wsBinding(row.id, \.qty)).keyboardType(.decimalPad)
+                            .multilineTextAlignment(.center).frame(width: 64)
+                        Text("— скидка")
+                        TextField("5", text: wsBinding(row.id, \.pct)).keyboardType(.decimalPad)
+                            .multilineTextAlignment(.center).frame(width: 56)
+                        Text("%")
+                        Spacer(minLength: 0)
+                        Button {
+                            let rid = row.id
+                            wsRows.removeAll { $0.id == rid }
+                        } label: {
+                            Image(systemName: "trash").foregroundColor(Brand.red)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Убрать ступень")
+                    }
+                    .font(.subheadline)
+                    .disabled(!canPrice)
+                }
+                if canPrice && wsRows.count < CategoryWholesaleLogic.maxTiers {
+                    Button("+ Ещё ступень") { wsRows.append(CategoryWholesaleLogic.Row()) }
+                        .buttonStyle(.borderless)
+                }
+            }
+        } header: {
+            Text("Оптовая скидка для товаров категории")
+        } footer: {
+            if !canPrice {
+                Text(verbatim: "Менять оптовую скидку может сотрудник с правом «Цены».")
+            } else if wsChanged, let e = wsError {
+                Text(verbatim: e).foregroundColor(.red)
+            } else {
+                Text(verbatim: wsFooterText)
+            }
+        }
+        .listRowBackground(Brand.card)
+        .onChange(of: wsMode) { m in
+            if m == CategoryWholesaleLogic.modeRule && wsRows.isEmpty { wsRows = [CategoryWholesaleLogic.Row()] }
+        }
+        .onChange(of: parentId) { pid in
+            // «Без опта» есть только у подкатегории; у верхнего уровня — «Нет опта».
+            if pid <= 0 && wsMode == CategoryWholesaleLogic.modeOff { wsMode = CategoryWholesaleLogic.modeInherit }
+        }
     }
 
     var body: some View {
@@ -429,6 +555,7 @@ private struct CategoryEditSheet: View {
                     }
                 }
                 .listRowBackground(Brand.card)
+                if showWholesale { wholesaleSection }
             }
             .scrollContentBackground(.hidden)
             .background(Brand.bg.ignoresSafeArea())
@@ -442,13 +569,17 @@ private struct CategoryEditSheet: View {
                         let sort = sortOrder
                         // parent_id уходит, только если изменился.
                         let par: Int? = parentId == initialParent ? nil : parentId
+                        // wholesale уходит, только если секцию меняли (и есть право «Цены»).
+                        let ws: [String: Any]? = (showWholesale && canPrice && wsChanged)
+                            ? CategoryWholesaleLogic.payload(mode: wsMode, rows: wsRows) : nil
                         Task {
                             fieldError = nil
-                            let err = await onSave(trimmed, sort, par)
+                            let err = await onSave(trimmed, sort, par, ws)
                             if let err { fieldError = err } else { dismiss() }
                         }
                     }
-                    .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty
+                              || (showWholesale && canPrice && wsChanged && wsError != nil))
                 }
             }
         }

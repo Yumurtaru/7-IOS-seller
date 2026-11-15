@@ -24,19 +24,21 @@ extension API {
     }
 
     func createCategory(name: String, parentId: Int? = nil, sortOrder: Int? = nil,
-                        stationRoute: String? = nil) async throws -> IdAck {
+                        stationRoute: String? = nil, wholesale: [String: Any]? = nil) async throws -> IdAck {
         var body: [String: Any?] = ["name": name]
         // Без sort_order сервер ставит новую категорию в конец уровня
         // (seller_products.php); 0 ставил её первой. Ключ шлём только если задан.
         if let sortOrder { body["sort_order"] = sortOrder }
         if let parentId { body["parent_id"] = parentId }
         if let stationRoute { body["station_route"] = stationRoute }
+        if let wholesale { body["wholesale"] = wholesale }   // А1331: ключ только если секцию меняли
         return try await post("api/seller/categories", body: body, as: IdAck.self)
     }
 
     func updateCategory(id: Int, name: String? = nil, isActive: Bool? = nil,
                         sortOrder: Int? = nil, stationRoute: String? = nil,
-                        setParent: Bool = false, parentId: Int? = nil) async throws {
+                        setParent: Bool = false, parentId: Int? = nil,
+                        wholesale: [String: Any]? = nil) async throws {
         var body: [String: Any?] = [:]
         if let name { body["name"] = name }
         if let isActive { body["is_active"] = isActive ? 1 : 0 }
@@ -45,6 +47,7 @@ extension API {
         // parent_id: число — подкатегория, явный null — верхний уровень (compactMapValues
         // в makeRequest убирает nil, поэтому NSNull()); не передан — сервер не трогает.
         if setParent { let v: Any = parentId.map { $0 as Any } ?? NSNull(); body["parent_id"] = v }
+        if let wholesale { body["wholesale"] = wholesale }   // А1331: нет ключа — сервер правило не трогает
         _ = try await put("api/seller/categories/\(id)", body: body, as: Phase2BoolAck.self)
     }
 

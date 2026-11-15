@@ -64,6 +64,8 @@ final class ProductEditViewModel: ObservableObject {
     }
     /// Текст ошибки под блоком (локальная проверка).
     @Published var tiersError: String?
+    /// А1331: опт категории, действующий для товара (nil — нет или старый сервер).
+    @Published var wholesaleCat: WholesaleCategoryInfo?
     /// Продавец менял блок: ключ price_tiers уходит, даже если сервер его не присылал.
     private var tiersTouched = false
     /// Сервер прислал price_tiers у товара (новый сервер) — ключ уходит всегда.
@@ -234,6 +236,7 @@ final class ProductEditViewModel: ObservableObject {
             isMarked = p.isMarked ?? false
             photos = p.photos ?? []
             serverSentTiers = p.priceTiers != nil
+            wholesaleCat = p.wholesaleCategory
             qtyFractional = p.qtyFractional
             tierRows = Wholesale.rows(from: p.priceTiers)
             tiersTouched = false
@@ -1020,6 +1023,12 @@ struct ProductEditView: View {
             }
             if let err = vm.tiersError {
                 Text(err).foregroundColor(Brand.red).font(.footnote)
+            }
+            // А1331: опт категории — действует, пока у товара нет своих ступеней.
+            if let note = CategoryWholesaleLogic.productNote(
+                vm.wholesaleCat, ownTiers: vm.tierRows.contains { !$0.isEmpty },
+                retail: Money.strict(vm.price), unit: unitText) {
+                Text(verbatim: note).foregroundColor(Brand.muted).font(.footnote)
             }
         } header: {
             Text("Оптовые цены")

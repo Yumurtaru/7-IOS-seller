@@ -151,3 +151,125 @@ enum Wholesale {
         return out.sorted { $0.0 < $1.0 }.map { $0.1 }
     }
 }
+
+// ============================================================================
+//  А1331 — опт категории («от N — скидка X %»). Чистая логика формы категории,
+//  метки в списке и подсказки в карточке товара. Тексты — как в кабинете сайта.
+// ============================================================================
+
+enum CategoryWholesaleLogic {
+    static let maxTiers = 5
+    static let modeInherit = "inherit"
+    static let modeRule = "rule"
+    static let modeOff = "off"
+
+    static let errEmpty = "Добавьте хотя бы одну ступень «от … — скидка … %» или выберите «Без опта»"
+    static let errMax = "Не больше 5 ступеней"
+    static let errQty = "Количество «от» должно быть больше нуля"
+    static let errPercent = "Скидка — больше 0 и меньше 100 %"
+    static let errOrder = "Чем больше берут, тем больше скидка: количество и скидка должны расти"
+
+    /// Строка редактора: оба поля — текст как ввёл продавец.
+    struct Row: Identifiable, Equatable {
+        var id = UUID()
+        var qty = ""
+        var pct = ""
+        var isEmpty: Bool {
+            qty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && pct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        /// Для сравнения «менялось ли» — без id.
+        var key: String { qty + "|" + pct }
+    }
+
+    static func rows(from w: CategoryWholesale?) -> [Row] {
+        (w?.tiers ?? []).sorted { ($0.minQty ?? 0) < ($1.minQty ?? 0) }.map {
+            Row(qty: $0.minQty.map(Wholesale.qtyText) ?? "", pct: $0.percent.map(Wholesale.qtyText) ?? "")
+        }
+    }
+
+    /// Режим из ответа сервера; неизвестный/пустой — «как у родителя».
+    static func mode(from w: CategoryWholesale?) -> String {
+        let m = (w?.mode ?? "").lowercased()
+        return (m == modeRule || m == modeOff) ? m : modeInherit
+    }
+
+    private struct Parsed { var qty: Decimal; var pct: Decimal }
+
+    private static func parse(_ rows: [Row]) -> [Parsed]? {
+        var out: [Parsed] = []
+        for r in rows where !r.isEmpty {
+            guard let q = Money.strict(r.qty.trimmingCharacters(in: .whitespacesAndNewlines), maxFraction: 3), q > 0 else { return nil }
+            guard let p = Money.strict(r.pct.trimmingCharacters(in: .whitespacesAndNewlines), maxFraction: 2), p > 0, p < 100 else { return nil }
+            out.append(Parsed(qty: q, pct: p))
+        }
+        return out
+    }
+
+    /// Проверка ступеней (режим «Скидка от количества»). nil — всё в порядке.
+    static func validate(rows: [Row]) -> String? {
+        let filled = rows.filter { !$0.isEmpty }
+        if filled.isEmpty { return errEmpty }
+        if filled.count > maxTiers { return errMax }
+        for r in filled {
+            guard let q = Money.strict(r.qty.trimmingCharacters(in: .whitespacesAndNewlines), maxFraction: 3), q > 0 else { return errQty }
+            guard let p = Money.strict(r.pct.trimmingCharacters(in: .whitespacesAndNewlines), maxFraction: 2), p > 0, p < 100 else { return errPercent }
+        }
+        guard let items = parse(rows) else { return errQty }
+        let sorted = items.sorted { $0.qty < $1.qty }
+        if sorted.count > 1 {
+            for i in 1..<sorted.count where sorted[i].qty <= sorted[i - 1].qty || sorted[i].pct <= sorted[i - 1].pct { return errOrder }
+        }
+        return nil
+    }
+
+    /// Тело ключа wholesale. Вызывать после validate (для rule).
+    static func payload(mode: String, rows: [Row]) -> [String: Any] {
+        guard mode == modeRule, let items = parse(rows) else { return ["mode": mode, "tiers": [[String: Any]]()] }
+        let tiers: [[String: Any]] = items.sorted { $0.qty < $1.qty }.map {
+            ["min_qty": NSDecimalNumber(decimal: $0.qty), "percent": NSDecimalNumber(decimal: $0.pct)]
+        }
+        return ["mode": mode, "tiers": tiers]
+    }
+
+    /// Метка в списке категорий: «опт −5 % от 10, −12,5 % от 24» / «без опта». Иначе nil.
+    static func badge(_ w: CategoryWholesale?) -> String? {
+        guard let w = w else { return nil }
+        let m = (w.mode ?? "").lowercased()
+        if m == modeRule, let ts = w.tiers, !ts.isEmpty {
+            let parts: [String] = ts.map { t in
+                let p = Wholesale.qtyText(t.percent ?? 0)
+                let q = Wholesale.qtyText(t.minQty ?? 0)
+                return "−\(p) % от \(q)"
+            }
+            return "опт " + parts.joined(separator: ", ")
+        }
+        if m == modeOff { return "без опта" }
+        return nil
+    }
+
+    /// Цена со скидкой, до копеек (только для показа; итог считает сервер).
+    private static func discounted(retail: Decimal, percent: Double) -> Decimal {
+        let p = Decimal(string: String(percent)) ?? 0
+        var value = retail * (100 - p) / 100
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &value, 2, .plain)
+        return rounded
+    }
+
+    /// Подсказка у оптовых цен товара. nil — у категории опта нет.
+    static func productNote(_ info: WholesaleCategoryInfo?, ownTiers: Bool, retail: Decimal?, unit: String) -> String? {
+        guard let info = info, let rule = info.rule, !rule.isEmpty else { return nil }
+        let name = (info.categoryName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rows: [String] = rule.sorted { ($0.minQty ?? 0) < ($1.minQty ?? 0) }.map { t in
+            let q = Wholesale.qtyText(t.minQty ?? 0)
+            let p = Wholesale.qtyText(t.percent ?? 0)
+            var s = "от \(q) \(unit) — скидка \(p) %"
+            if let r = retail, r > 0 { s += " (\(Money.rub(discounted(retail: r, percent: t.percent ?? 0))))" }
+            return s
+        }
+        let list = rows.joined(separator: "; ")
+        if ownTiers { return "Опт категории «\(name)» (\(list)) не действует: у товара свои оптовые цены." }
+        return "Действует опт категории «\(name)»: \(list). Чтобы задать свои цены, добавьте ступени выше."
+    }
+}

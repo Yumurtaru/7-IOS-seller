@@ -879,9 +879,12 @@ struct ProductDetail: Decodable {
     /// А1328: закупочная цена ("45.50" | null) и текущий остаток (колонка products.stock_qty). Старый сервер — nil.
     @LenientDecimal var purchasePrice: Decimal?
     @LenientDecimal var stockQty: Decimal?
+    /// А1331: опт категории, действующий для товара (null — нет). Старый сервер — nil.
+    @LenientObject var wholesaleCategory: WholesaleCategoryInfo?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, type, price, unit, weight, article, barcode
+        case wholesaleCategory = "wholesale_category"
         case purchasePrice = "purchase_price"
         case stockQty = "stock_qty"
         case priceTiers = "price_tiers"

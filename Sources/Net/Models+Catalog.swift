@@ -24,6 +24,8 @@ struct ProductCategory: Decodable, Identifiable {
     let qtyPresets: String?
     @LenientDecimal var markupPercent: Decimal?
     let roundingMode: String?
+    /// А1331: опт категории. Старый сервер ключа не шлёт — nil (секцию в форме не показываем).
+    @LenientObject var wholesale: CategoryWholesale?
 
     var categoryId: Int { id ?? 0 }
 
@@ -38,6 +40,7 @@ struct ProductCategory: Decodable, Identifiable {
         case qtyPresets = "qty_presets"
         case markupPercent = "markup_percent"
         case roundingMode = "rounding_mode"
+        case wholesale
     }
 }
 
