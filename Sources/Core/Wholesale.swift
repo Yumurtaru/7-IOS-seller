@@ -169,6 +169,64 @@ enum CategoryWholesaleLogic {
     static let errPercent = "Скидка — больше 0 и меньше 100 %"
     static let errOrder = "Чем больше берут, тем больше скидка: количество и скидка должны расти"
 
+    // ── А1432: округление цены ступени ─────────────────────────────────────
+    static let modeDown = "down"
+    static let modeNearest = "nearest"
+    static let modeUp = "up"
+    /// Шаги в копейках → подпись выбора.
+    static let stepOptions: [(cents: Int, title: String)] = [
+        (1, "до копеек"), (10, "до 10 коп."), (50, "до 50 коп."), (100, "до рубля"),
+        (500, "до 5 ₽"), (1000, "до 10 ₽"), (5000, "до 50 ₽"), (10000, "до 100 ₽")
+    ]
+    static let roundModeOptions: [(mode: String, title: String)] = [
+        (modeDown, "вниз — в пользу покупателя"), (modeNearest, "до ближайшего"), (modeUp, "вверх")
+    ]
+
+    /// Шаг сервера ("1.00") → копейки; не из списка — 1 (до копеек).
+    static func stepCents(_ r: CategoryRounding?) -> Int {
+        guard let st = r?.step else { return 1 }
+        var v = st * 100
+        var out = Decimal()
+        NSDecimalRound(&out, &v, 0, .plain)
+        let c = NSDecimalNumber(decimal: out).intValue
+        return stepOptions.contains { $0.cents == c } ? c : 1
+    }
+
+    static func roundMode(_ r: CategoryRounding?) -> String {
+        let m = (r?.mode ?? "").lowercased()
+        return (m == modeDown || m == modeUp) ? m : modeNearest
+    }
+
+    /// Шаг в виде денег строкой для запроса: 100 → "1.00".
+    static func stepString(_ cents: Int) -> String {
+        let k = cents % 100
+        return "\(cents / 100)." + (k < 10 ? "0\(k)" : "\(k)")
+    }
+
+    static func stepTitle(_ cents: Int) -> String {
+        stepOptions.first { $0.cents == cents }?.title ?? "до копеек"
+    }
+
+    static func modeWord(_ mode: String) -> String {
+        mode == modeDown ? "вниз" : (mode == modeUp ? "вверх" : "до ближайшего")
+    }
+
+    /// Цена ступени в рублях: копейки = розница×100×(1−X/100), округление по шагу и способу.
+    /// nil — ступень не действует (≤ 0 или не ниже розницы). Только для показа; итог считает сервер.
+    static func tierPrice(retail: Decimal, percent: Double, stepCents: Int, mode: String) -> Decimal? {
+        guard retail > 0, percent.isFinite else { return nil }
+        let p = Decimal(string: String(percent)) ?? 0
+        let step = Decimal(max(stepCents, 1))
+        let raw = retail * 100 * (100 - p) / 100
+        var units = raw / step
+        var rounded = Decimal()
+        let rm: NSDecimalNumber.RoundingMode = mode == modeDown ? .down : (mode == modeUp ? .up : .plain)
+        NSDecimalRound(&rounded, &units, 0, rm)
+        let price = rounded * step / 100
+        if price <= 0 || price >= retail { return nil }
+        return price
+    }
+
     /// Строка редактора: оба поля — текст как ввёл продавец.
     struct Row: Identifiable, Equatable {
         var id = UUID()
@@ -224,12 +282,30 @@ enum CategoryWholesaleLogic {
     }
 
     /// Тело ключа wholesale. Вызывать после validate (для rule).
-    static func payload(mode: String, rows: [Row]) -> [String: Any] {
+    /// rounding — (шаг в копейках, способ); nil — ключ rounding не шлём (сервер оставит прежнее).
+    static func payload(mode: String, rows: [Row], rounding: (cents: Int, mode: String)? = nil) -> [String: Any] {
         guard mode == modeRule, let items = parse(rows) else { return ["mode": mode, "tiers": [[String: Any]]()] }
         let tiers: [[String: Any]] = items.sorted { $0.qty < $1.qty }.map {
             ["min_qty": NSDecimalNumber(decimal: $0.qty), "percent": NSDecimalNumber(decimal: $0.pct)]
         }
-        return ["mode": mode, "tiers": tiers]
+        var out: [String: Any] = ["mode": mode, "tiers": tiers]
+        if let r = rounding { out["rounding"] = ["step": stepString(r.cents), "mode": r.mode] }
+        return out
+    }
+
+    /// Пример на цене продавца: «от 10 — 130 ₽ (−5,39 %)» или «от 10 — не действует».
+    static func probeLines(rows: [Row], retail: Decimal, stepCents: Int, mode: String) -> [String] {
+        let items = (parse(rows) ?? []).sorted { $0.qty < $1.qty }
+        return items.map { it in
+            let q = Wholesale.qtyText(NSDecimalNumber(decimal: it.qty).doubleValue)
+            let pc = NSDecimalNumber(decimal: it.pct).doubleValue
+            guard let price = tierPrice(retail: retail, percent: pc, stepCents: stepCents, mode: mode) else {
+                return "от \(q) — не действует (цена не ниже розницы или ноль)"
+            }
+            let eff = NSDecimalNumber(decimal: (retail - price) / retail * 100).doubleValue
+            let effText = String(format: "%.2f", eff).replacingOccurrences(of: ".", with: ",")
+            return "от \(q) — \(Money.rub(price)) (−\(effText) %)"
+        }
     }
 
     /// Метка в списке категорий: «опт −5 % от 10, −12,5 % от 24» / «без опта». Иначе nil.
@@ -242,30 +318,34 @@ enum CategoryWholesaleLogic {
                 let q = Wholesale.qtyText(t.minQty ?? 0)
                 return "−\(p) % от \(q)"
             }
-            return "опт " + parts.joined(separator: ", ")
+            var label = "опт " + parts.joined(separator: ", ")
+            let cents = stepCents(w.rounding)
+            if cents > 1 {
+                label += " · округление \(stepTitle(cents)) \(modeWord(roundMode(w.rounding)))"
+            }
+            return label
         }
         if m == modeOff { return "без опта" }
         return nil
-    }
-
-    /// Цена со скидкой, до копеек (только для показа; итог считает сервер).
-    private static func discounted(retail: Decimal, percent: Double) -> Decimal {
-        let p = Decimal(string: String(percent)) ?? 0
-        var value = retail * (100 - p) / 100
-        var rounded = Decimal()
-        NSDecimalRound(&rounded, &value, 2, .plain)
-        return rounded
     }
 
     /// Подсказка у оптовых цен товара. nil — у категории опта нет.
     static func productNote(_ info: WholesaleCategoryInfo?, ownTiers: Bool, retail: Decimal?, unit: String) -> String? {
         guard let info = info, let rule = info.rule, !rule.isEmpty else { return nil }
         let name = (info.categoryName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cents = stepCents(info.rounding)
+        let rmode = roundMode(info.rounding)
         let rows: [String] = rule.sorted { ($0.minQty ?? 0) < ($1.minQty ?? 0) }.map { t in
             let q = Wholesale.qtyText(t.minQty ?? 0)
             let p = Wholesale.qtyText(t.percent ?? 0)
             var s = "от \(q) \(unit) — скидка \(p) %"
-            if let r = retail, r > 0 { s += " (\(Money.rub(discounted(retail: r, percent: t.percent ?? 0))))" }
+            if let r = retail, r > 0 {
+                if let price = tierPrice(retail: r, percent: t.percent ?? 0, stepCents: cents, mode: rmode) {
+                    s += " (\(Money.rub(price)))"
+                } else {
+                    s += " (не действует)"
+                }
+            }
             return s
         }
         let list = rows.joined(separator: "; ")

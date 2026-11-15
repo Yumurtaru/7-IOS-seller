@@ -51,18 +51,31 @@ struct CategoryWholesaleTier: Decodable, Hashable {
     enum CodingKeys: String, CodingKey { case minQty = "min_qty", percent }
 }
 
+/// А1432: округление цены ступени. step — деньги ("1.00", строка или число), mode — nearest|down|up.
+struct CategoryRounding: Decodable {
+    @LenientDecimal var step: Decimal?
+    var mode: String?
+
+    enum CodingKeys: String, CodingKey { case step, mode }
+}
+
 struct CategoryWholesale: Decodable {
     var mode: String?
     var tiers: [CategoryWholesaleTier]?
+    /// А1432: нет ключа (старый сервер) — nil.
+    var rounding: CategoryRounding?
 
-    init(mode: String?, tiers: [CategoryWholesaleTier]?) { self.mode = mode; self.tiers = tiers }
+    init(mode: String?, tiers: [CategoryWholesaleTier]?, rounding: CategoryRounding? = nil) {
+        self.mode = mode; self.tiers = tiers; self.rounding = rounding
+    }
 
-    enum CodingKeys: String, CodingKey { case mode, tiers }
+    enum CodingKeys: String, CodingKey { case mode, tiers, rounding }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         mode = (try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil
         tiers = (try? c.decodeIfPresent([CategoryWholesaleTier].self, forKey: .tiers)) ?? nil
+        rounding = (try? c.decodeIfPresent(CategoryRounding.self, forKey: .rounding)) ?? nil
     }
 }
 
@@ -71,9 +84,11 @@ struct WholesaleCategoryInfo: Decodable {
     @LenientInt var categoryId: Int?
     var categoryName: String?
     var rule: [CategoryWholesaleTier]?
+    /// А1432: округление правила; нет ключа — nil (считаем «до копеек»).
+    var rounding: CategoryRounding?
 
     enum CodingKeys: String, CodingKey {
-        case categoryId = "category_id", categoryName = "category_name", rule
+        case categoryId = "category_id", categoryName = "category_name", rule, rounding
     }
 
     init(from decoder: Decoder) throws {
@@ -81,6 +96,7 @@ struct WholesaleCategoryInfo: Decodable {
         _categoryId = (try? c.decodeIfPresent(LenientInt.self, forKey: .categoryId)) ?? LenientInt(wrappedValue: nil)
         categoryName = (try? c.decodeIfPresent(String.self, forKey: .categoryName)) ?? nil
         rule = (try? c.decodeIfPresent([CategoryWholesaleTier].self, forKey: .rule)) ?? nil
+        rounding = (try? c.decodeIfPresent(CategoryRounding.self, forKey: .rounding)) ?? nil
     }
 }
 

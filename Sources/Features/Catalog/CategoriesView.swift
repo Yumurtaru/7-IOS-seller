@@ -402,11 +402,18 @@ private struct CategoryEditSheet: View {
     let canPrice: Bool
     private let initialWsMode: String
     private let initialWsKeys: [String]
+    private let initialWsStep: Int
+    private let initialWsRMode: String
+    /// Сервер прислал rounding — при сохранении правила шлём его всегда (не сбрасываем).
+    private let serverSentRounding: Bool
 
     @State private var parentId: Int
     @State private var fieldError: String?
     @State private var wsMode: String
     @State private var wsRows: [CategoryWholesaleLogic.Row]
+    @State private var wsStep: Int
+    @State private var wsRMode: String
+    @State private var wsProbe = ""
     @Environment(\.dismiss) private var dismiss
 
     init(title: String, name: String, sortOrder: Int?, initialParent: Int,
@@ -430,6 +437,13 @@ private struct CategoryEditSheet: View {
         initialWsKeys = r.map { $0.key }
         _wsMode = State(initialValue: m)
         _wsRows = State(initialValue: r)
+        let st = CategoryWholesaleLogic.stepCents(wholesale?.rounding)
+        let rm = CategoryWholesaleLogic.roundMode(wholesale?.rounding)
+        initialWsStep = st
+        initialWsRMode = rm
+        serverSentRounding = wholesale?.rounding != nil
+        _wsStep = State(initialValue: st)
+        _wsRMode = State(initialValue: rm)
     }
 
     // ── А1331: опт категории ────────────────────────────────────────────────
@@ -448,7 +462,57 @@ private struct CategoryEditSheet: View {
 
     private var wsChanged: Bool {
         if wsMode != initialWsMode { return true }
-        return wsMode == CategoryWholesaleLogic.modeRule && wsRows.map { $0.key } != initialWsKeys
+        guard wsMode == CategoryWholesaleLogic.modeRule else { return false }
+        return wsRows.map { $0.key } != initialWsKeys || wsRoundingChanged
+    }
+
+    private var wsRoundingChanged: Bool {
+        wsStep != initialWsStep || (wsStep > 1 && wsRMode != initialWsRMode)
+    }
+
+    /// Шаг: смена с «до копеек» на больший сразу ставит способ по умолчанию «вниз» (как в кабинете).
+    private var wsStepBinding: Binding<Int> {
+        Binding(
+            get: { wsStep },
+            set: { v in
+                if wsStep == 1 && v > 1 { wsRMode = CategoryWholesaleLogic.modeDown }
+                wsStep = v
+            }
+        )
+    }
+
+    /// Округление в запросе: шлём, если правило уже было с rounding или его меняли.
+    private var wsRoundingPayload: (cents: Int, mode: String)? {
+        guard serverSentRounding || wsRoundingChanged else { return nil }
+        return (wsStep, wsStep > 1 ? wsRMode : CategoryWholesaleLogic.modeNearest)
+    }
+
+    /// Строки «Проверить на цене» (пусто — цена не введена или ступени не разобрались).
+    private var wsProbeLines: [String] {
+        guard let r = Money.strict(wsProbe), r > 0 else { return [] }
+        return CategoryWholesaleLogic.probeLines(rows: wsRows, retail: r, stepCents: wsStep,
+                                                 mode: wsStep > 1 ? wsRMode : CategoryWholesaleLogic.modeNearest)
+    }
+
+    /// А1432: округление цены ступени и пример на цене.
+    @ViewBuilder
+    private var wsRoundingControls: some View {
+        Picker("Округлять цену", selection: wsStepBinding) {
+            ForEach(0..<CategoryWholesaleLogic.stepOptions.count, id: \.self) { i in
+                Text(CategoryWholesaleLogic.stepOptions[i].title).tag(CategoryWholesaleLogic.stepOptions[i].cents)
+            }
+        }
+        if wsStep > 1 {
+            Picker("Способ округления", selection: $wsRMode) {
+                ForEach(0..<CategoryWholesaleLogic.roundModeOptions.count, id: \.self) { i in
+                    Text(CategoryWholesaleLogic.roundModeOptions[i].title).tag(CategoryWholesaleLogic.roundModeOptions[i].mode)
+                }
+            }
+        }
+        TextField("Проверить на цене, ₽", text: $wsProbe).keyboardType(.decimalPad)
+        ForEach(wsProbeLines, id: \.self) { line in
+            Text(verbatim: line).font(.footnote).foregroundColor(Brand.muted)
+        }
     }
 
     /// Ошибка ступеней — только когда выбран режим «Скидка от количества».
@@ -504,6 +568,7 @@ private struct CategoryEditSheet: View {
                     Button("+ Ещё ступень") { wsRows.append(CategoryWholesaleLogic.Row()) }
                         .buttonStyle(.borderless)
                 }
+                wsRoundingControls.disabled(!canPrice)
             }
         } header: {
             Text("Оптовая скидка для товаров категории")
@@ -571,7 +636,7 @@ private struct CategoryEditSheet: View {
                         let par: Int? = parentId == initialParent ? nil : parentId
                         // wholesale уходит, только если секцию меняли (и есть право «Цены»).
                         let ws: [String: Any]? = (showWholesale && canPrice && wsChanged)
-                            ? CategoryWholesaleLogic.payload(mode: wsMode, rows: wsRows) : nil
+                            ? CategoryWholesaleLogic.payload(mode: wsMode, rows: wsRows, rounding: wsRoundingPayload) : nil
                         Task {
                             fieldError = nil
                             let err = await onSave(trimmed, sort, par, ws)
