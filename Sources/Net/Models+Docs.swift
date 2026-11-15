@@ -99,7 +99,8 @@ struct StockDocument: Decodable, Identifiable {
 enum DocDates {
     static func shown(posted: String?, doc: String?, created: String?) -> String? {
         for s in [posted, doc, created] {
-            if let s, !s.isEmpty { return s }
+            // «0000-00-00 …» — пустая дата MySQL, не дата (как на Android).
+            if let s, !s.isEmpty, !s.hasPrefix("0000") { return s }
         }
         return nil
     }
@@ -320,7 +321,10 @@ struct DocItemDraft: Identifiable {
             "price": "\(price)",
         ]
         if let p = qtyPlan {
-            out["qty_plan"] = "\(p)"
+            // Учётный остаток бывает минусовым (и «Обнуление остатков» пишет такой план), а сервер
+            // (docItemsInvalid) отвергает отрицательный qty_plan с 422. При проведении план сервер
+            // всё равно берёт из текущего остатка — минус уходит как 0 (как на Android).
+            out["qty_plan"] = p < 0 ? "0" : "\(p)"
             out["qty_fact"] = "\(qty)"
         }
         if let r = reason, !r.isEmpty { out["reason"] = r }

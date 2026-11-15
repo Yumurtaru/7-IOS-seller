@@ -60,7 +60,7 @@ struct SubstitutionItemRow: View {
     private func substituteBlock(_ s: SubstituteInfo) -> some View {
         let qty = s.qty.map { "\($0)" } ?? ""
         let price = s.price.map { Money.rub($0) } ?? ""
-        let line = "Замена: " + (s.name ?? "товар")
+        let line: String = "Замена: " + (s.name ?? "товар")
             + (qty.isEmpty ? "" : " · \(qty)")
             + (price.isEmpty ? "" : " × \(price)")
         Text(line).font(.footnote).foregroundColor(Brand.text)

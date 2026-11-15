@@ -49,8 +49,9 @@ final class ZeroStockFlow: ObservableObject {
                 }
                 return
             }
-            // Сервер отдаёт в items не больше 300 строк: общий счётчик — zeroed.
-            let total = max(r.zeroed ?? 0, items.count)
+            // Сервер отдаёт в items не больше 300 строк, и по складам строки товара повторяются:
+            // счётчик товаров — zeroed (иначе число разных товаров, как на Android), не число строк.
+            let total = max(r.zeroed ?? 0, Set(items.compactMap { $0.id }).count)
             plan = Plan(ids: ids, count: total, message: Self.planText(r, total: total))
         } catch is CancellationError {
         } catch {
@@ -104,11 +105,22 @@ final class ZeroStockFlow: ObservableObject {
     static func planText(_ r: ZeroStockResult, total: Int) -> String {
         var lines: [String] = []
         let items = r.items ?? []
+        // Несколько складов — строка товара повторяется по складам: подписываем склад.
+        let manyWh = Set(items.compactMap { $0.warehouseId }).count > 1
+        var whNames: [Int: String] = [:]
+        for d in r.documents ?? [] {
+            if let w = d.warehouseId, let n = d.warehouse, !n.isEmpty, whNames[w] == nil { whNames[w] = n }
+        }
         for it in items.prefix(showLimit) {
             let name = (it.name ?? "").isEmpty ? "Товар №\(it.id ?? 0)" : (it.name ?? "")
-            lines.append("\(name): \(qtyText(it.qty)) → 0")
+            var wh = ""
+            if manyWh, let w = it.warehouseId { wh = " (" + (whNames[w] ?? "склад №\(w)") + ")" }
+            lines.append("\(name)\(wh): \(qtyText(it.qty)) → 0")
         }
-        if total > showLimit { lines.append("и ещё \(total - showLimit)") }
+        // Скрытые строки: по строкам items (их до 300), а если товаров больше — по счётчику товаров.
+        let shown = min(items.count, showLimit)
+        let hidden = max(items.count, total) - shown
+        if hidden > 0 { lines.append("и ещё \(hidden)") }
         let skipped = r.skipped ?? []
         if !skipped.isEmpty {
             lines.append("")

@@ -120,7 +120,11 @@ final class DocumentEditViewModel: ObservableObject {
             row.priceTouched = true
             row.article = it.article
             row.barcode = it.barcode
-            row.expiresAt = it.expiresAt
+            // Срок годности — только настоящая дата «yyyy-MM-dd» (паритет с Android): пустая дата MySQL
+            // «0000-00-00» ушла бы обратно в repost и уронила вставку строки.
+            if let e = it.expiresAt?.trimmingCharacters(in: .whitespaces).prefix(10), e.count == 10, !e.hasPrefix("0000") {
+                row.expiresAt = String(e)
+            }
             // Ручная розница строки — в поле и «как была»: иначе повторное проведение
             // пересчитало бы цену товара по наценке категории.
             if let rp = it.retailPrice, rp > 0 {
@@ -758,8 +762,9 @@ struct DocumentEditView: View {
             }
 
             Section("Позиции") {
-                ForEach(vm.droppedNames, id: \.self) { n in
-                    Text(verbatim: "Товар удалён — строка не сохранится: \(n)")
+                // id — позиция: у двух удалённых товаров может быть одно имя (повтор id ломает ForEach).
+                ForEach(Array(vm.droppedNames.enumerated()), id: \.offset) { pair in
+                    Text(verbatim: "Товар удалён — строка не сохранится: \(pair.element)")
                         .font(.caption).foregroundColor(Brand.red)
                 }
                 ForEach($vm.items) { $item in

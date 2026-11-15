@@ -491,10 +491,22 @@ struct DocumentDateSheet: View {
     @State private var needsReload = false
     @State private var idem = IdempotencyKeys.form()
 
+    /// Дата документа, как пришла (nil — не разобралась): с ней сравниваем выбор.
+    private let initialDate: Date?
+
     init(doc: StockDocumentDetail, onDone: @escaping (String?) -> Void = { _ in }) {
         self.doc = doc
         self.onDone = onDone
-        _date = State(initialValue: DateFmt.parse(doc.shownDate) ?? Date())
+        let d0 = DateFmt.parse(doc.shownDate)
+        initialDate = d0
+        _date = State(initialValue: d0 ?? Date())
+    }
+
+    /// Дата реально сменилась (с точностью до минуты, как сверяет сервер) — иначе лишнее перепроведение.
+    private var dateChanged: Bool {
+        guard touched else { return false }
+        guard let o = initialDate else { return true }
+        return floor(date.timeIntervalSince1970 / 60) != floor(o.timeIntervalSince1970 / 60)
     }
 
     var body: some View {
@@ -513,7 +525,7 @@ struct DocumentDateSheet: View {
                         .font(.body.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
-                .disabled(saving || !touched)
+                .disabled(saving || !dateChanged)
             }
             .listRowBackground(Brand.card)
         }
@@ -550,7 +562,9 @@ struct DocumentDateSheet: View {
         } catch let e as APIDetailedError {
             // 409 — документ остался прежним; список перечитаем при закрытии. 5xx — исход неизвестен,
             // повтор уйдёт с тем же ключом.
-            if e.status == 409 && (e.code ?? "").hasPrefix("idempotency") == false { needsReload = true }
+            // 5xx и отказы по ключу повтора (in_progress/unknown_outcome) — исход неизвестен: дата могла
+            // смениться, поэтому при закрытии список тоже перечитываем.
+            if e.status == 409 || e.status >= 500 || (e.code ?? "").hasPrefix("idempotency") { needsReload = true }
             error = e.status == 409 && (e.code ?? "").hasPrefix("idempotency") == false
                 ? "\(e.message)\nДокумент остался прежним." : e.message
         } catch is CancellationError {
