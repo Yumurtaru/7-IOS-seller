@@ -56,6 +56,9 @@ struct CategoryRounding: Decodable {
     @LenientDecimal var step: Decimal?
     var mode: String?
 
+    /// Пустое округление (по умолчанию «до копеек») — для формы новой категории, когда сервер его знает.
+    init(step: Decimal? = nil, mode: String? = nil) { _step = LenientDecimal(wrappedValue: step); self.mode = mode }
+
     enum CodingKeys: String, CodingKey { case step, mode }
 }
 

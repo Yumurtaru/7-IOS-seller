@@ -55,7 +55,8 @@ enum AppUpdateLogic {
     /// (CFBundleShortVersionString): номера сборок — для Android. Без ссылки на
     /// магазин ничего не показываем: кнопке «Обновить» некуда вести.
     static func decide(_ info: AppVersionInfo, version: String) -> UpdateDecision {
-        guard !info.storeUrl.trimmingCharacters(in: .whitespaces).isEmpty else { return .none }
+        // А1433: ссылка на магазин — только https (пустая или чужая схема — окна нет).
+        guard info.storeUrl.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("https://") else { return .none }
         // Версию приложения не прочитали — не с чем сравнивать: «""» оказалась бы ниже
         // любой и заперла бы приложение экраном «Нужно обновить». Молчим.
         guard !version.trimmingCharacters(in: .whitespaces).isEmpty else { return .none }

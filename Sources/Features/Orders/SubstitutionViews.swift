@@ -28,7 +28,9 @@ struct SubstitutionItemRow: View {
     }
 
     private var canPropose: Bool {
+        // Позицию с нулевым количеством или ценой сервер заменить не даёт (bad_item, 422).
         canAct && (item.lineId ?? 0) > 0 && sub == nil && !Substitution.orderClosed(orderStatus)
+            && (item.qty ?? 0) > 0 && (item.price ?? 0) > 0
     }
 
     var body: some View {
@@ -48,7 +50,7 @@ struct SubstitutionItemRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .sheet(isPresented: $showPicker) {
-                SubstitutionPickerSheet(itemName: item.name ?? "Позиция") { productId, qty in
+                SubstitutionPickerSheet(itemName: item.name ?? "Позиция", originalProductId: item.productId ?? 0) { productId, qty in
                     showPicker = false
                     Task { _ = await onPropose(item.lineId ?? 0, productId, qty) }
                 }
@@ -106,6 +108,7 @@ struct SubstitutionItemRow: View {
 /// Выбор товара своего магазина (поиск по активным) и количество (необязательно).
 struct SubstitutionPickerSheet: View {
     let itemName: String
+    let originalProductId: Int
     let onPick: (Int, Decimal?) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -184,7 +187,11 @@ struct SubstitutionPickerSheet: View {
                     let page = try await API.shared.products(category: nil, status: "active",
                                                              q: query.isEmpty ? nil : query, page: 1)
                     if Task.isCancelled { return }
-                    results = page.items.filter { $0.isAvailable != false && $0.stopped != true }
+                    // Тот же товар (same_product) и услугу (bad_product) сервер не принимает.
+                    results = page.items.filter {
+                        $0.isAvailable != false && $0.stopped != true && $0.type != "service"
+                            && (originalProductId <= 0 || $0.id != originalProductId)
+                    }
                     loadError = nil
                 } catch is CancellationError {
                 } catch {

@@ -536,7 +536,8 @@ struct OrderDetailView: View {
                         item: item,
                         orderStatus: o.status,
                         clientPhone: o.clientPhone,
-                        canAct: Session.shared.can("orders"),
+                        // Сервер требует orders.status; у брони жилья замен нет (not_supported).
+                        canAct: o.lodging == nil && Session.shared.can("orders.status"),
                         busy: vm.isActing,
                         onPropose: { itemId, productId, qty in await vm.proposeSubstitute(itemId: itemId, productId: productId, qty: qty) },
                         onRevoke: { itemId in await vm.revokeSubstitute(itemId: itemId) }

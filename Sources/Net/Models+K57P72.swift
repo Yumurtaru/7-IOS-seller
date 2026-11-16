@@ -111,9 +111,11 @@ enum Substitution {
         }
     }
 
-    /// Заказ уже в конце пути — замену предлагать поздно.
+    /// Заказ уже собран или в конце пути — замену предлагать поздно. Копия
+    /// Substitution::OPEN_STATUSES сервера (new|accepted|preparing); иначе у «Готов»,
+    /// «В пути», «Выполнен» кнопка давала 422.
     static func orderClosed(_ status: String?) -> Bool {
-        ["completed", "delivered", "cancelled", "refunded", "rejected"].contains(status ?? "")
+        !["new", "accepted", "preparing"].contains(status ?? "")
     }
 }
 

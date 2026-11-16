@@ -321,10 +321,8 @@ struct DocItemDraft: Identifiable {
             "price": "\(price)",
         ]
         if let p = qtyPlan {
-            // Учётный остаток бывает минусовым (и «Обнуление остатков» пишет такой план), а сервер
-            // (docItemsInvalid) отвергает отрицательный qty_plan с 422. При проведении план сервер
-            // всё равно берёт из текущего остатка — минус уходит как 0 (как на Android).
-            out["qty_plan"] = p < 0 ? "0" : "\(p)"
+            // Учётный остаток бывает минусовым — сервер (П-80) принимает отрицательный qty_plan как есть.
+            out["qty_plan"] = "\(p)"
             out["qty_fact"] = "\(qty)"
         }
         if let r = reason, !r.isEmpty { out["reason"] = r }

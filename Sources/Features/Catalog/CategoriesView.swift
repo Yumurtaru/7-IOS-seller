@@ -60,6 +60,9 @@ final class CategoriesViewModel: ObservableObject {
     /// А1331: сервер знает про опт категорий (прислал wholesale хотя бы у одной) — в форме новой категории секция есть.
     var serverHasWholesale: Bool { items.contains { $0.wholesale != nil } }
 
+    /// А1432: сервер знает округление опта (прислал rounding хотя бы у одной) — как на Android.
+    var serverHasRounding: Bool { items.contains { $0.wholesale?.rounding != nil } }
+
     /// Категории верхнего уровня (кроме самой редактируемой) — варианты родителя.
     func parentOptions(excluding id: Int) -> [ProductCategory] {
         items.filter { ($0.parentId ?? 0) <= 0 && $0.categoryId != id }.sorted(by: Self.before)
@@ -240,7 +243,10 @@ struct CategoriesView: View {
                                   name: "", sortOrder: nil, initialParent: parent,
                                   parentOptions: vm.parentOptions(excluding: 0), hasChildren: false,
                                   busy: vm.busy,
-                                  wholesale: vm.serverHasWholesale ? CategoryWholesale(mode: "inherit", tiers: []) : nil,
+                                  wholesale: vm.serverHasWholesale
+                                      ? CategoryWholesale(mode: "inherit", tiers: [],
+                                                          rounding: vm.serverHasRounding ? CategoryRounding() : nil)
+                                      : nil,
                                   canPrice: canEditWholesale) { name, sort, par, ws in
                     // паритет с Android: порядок у новой категории по умолчанию не задан.
                     await vm.create(name: name, sortOrder: sort, parentId: par ?? parent, wholesale: ws)
@@ -568,7 +574,8 @@ private struct CategoryEditSheet: View {
                     Button("+ Ещё ступень") { wsRows.append(CategoryWholesaleLogic.Row()) }
                         .buttonStyle(.borderless)
                 }
-                wsRoundingControls.disabled(!canPrice)
+                // Старый сервер (нет rounding) выбор не сохранит — блок не показываем (паритет с Android).
+                if serverSentRounding { wsRoundingControls.disabled(!canPrice) }
             }
         } header: {
             Text("Оптовая скидка для товаров категории")
