@@ -916,7 +916,7 @@ final class API {
     /// идёт сразу, и запрос не должен зависеть от того, успел ли он прочитать
     /// токен до неё. push_token — чтобы сервер выключил уведомления этого
     /// устройства для вышедшего пользователя.
-    func logout(accessToken: String?, pushToken: String?) async {
+    func logout(accessToken: String?, pushToken: String?, refreshToken: String? = nil) async {
         guard let url = URL(string: API.base + "/api/v1/auth/logout") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -924,6 +924,9 @@ final class API {
         if let t = accessToken, !t.isEmpty { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
         var body: [String: String] = [:]
         if let p = pushToken, !p.isEmpty { body["push_token"] = p }
+        // П-48 №2: refresh-токен в теле — сервер закрывает сессию по нему. Cookie с refresh к
+        // моменту запроса уже стёрта (clearCookies в signOut), и сессия жила бы ещё до 30 дней.
+        if let r = refreshToken, !r.isEmpty { body["refresh_token"] = r }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         _ = try? await session.data(for: req)
         API.clearCookies()
@@ -1254,6 +1257,8 @@ final class API {
             Task { @MainActor in Session.shared.onForbidden() }
         }
 
+        // 204 / пустое тело на 2xx — успешное подтверждение без данных: для EmptyData это успех, а не «Не удалось обработать ответ».
+        if (200..<300).contains(status), status == 204 || data.isEmpty, let empty = EmptyData() as? T { return empty }
         do {
             let env = try decoder.decode(SellerEnvelope<T>.self, from: data)
             // ok=false — прикладная ошибка: показываем текст сервера (в т.ч. валидацию).

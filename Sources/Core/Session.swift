@@ -92,8 +92,9 @@ final class Session: ObservableObject {
                 // ждёт всю цепочку — иначе поздний ответ погасил бы новую.
                 let tok = Keychain.get(.accessToken)
                 let push = PushManager.shared.deviceToken
+                let rt = Keychain.get(.refreshToken)   // читаем ДО signOut: он стирает Keychain
                 self.pushUnregister = Task {
-                    await API.shared.logout(accessToken: tok, pushToken: push)
+                    await API.shared.logout(accessToken: tok, pushToken: push, refreshToken: rt)
                     if let push, !push.isEmpty { await API.shared.unregisterPushToken(push) }
                 }
                 self.signOut(serverLogout: false)   // выход на сервере уже в цепочке выше
@@ -204,8 +205,9 @@ final class Session: ObservableObject {
         // нужно — локальная очистка идёт в любом случае.
         let tok = Keychain.get(.accessToken)
         let push = PushManager.shared.deviceToken
+        let rt = Keychain.get(.refreshToken)   // до Keychain.clearAll(): иначе сессия на сервере не закроется
         accountEpoch += 1   // bootstrap/switch-shop в пути не запишут данные вышедшего
-        if serverLogout { Task { await API.shared.logout(accessToken: tok, pushToken: push) } }
+        if serverLogout { Task { await API.shared.logout(accessToken: tok, pushToken: push, refreshToken: rt) } }
         Keychain.clearAll()
         API.clearCookies()
         UserDefaults.standard.removeObject(forKey: "seller_user")
@@ -243,7 +245,11 @@ final class Session: ObservableObject {
         // Незавершённые отправки «Создать заказы» прежнего аккаунта: при своём «Выйти» забываем.
         // При истёкшей сессии (signOutNotice задан) вернётся тот же человек — ключ остаётся
         // (имя записи включает магазин и пользователя, чужой её не подхватит).
-        if signOutNotice == nil { ReplPendingStore.clearAll() }
+        if signOutNotice == nil {
+            ReplPendingStore.clearAll()
+            // Ключи повтора прежнего аккаунта: такой же запрос следующего вошедшего не должен уйти с чужим ключом.
+            IdempotencyKeys.shared.forgetAll()
+        }
         DeepLinkRouter.shared.reset()
         isLoggedIn = false
     }
@@ -401,6 +407,7 @@ final class Session: ObservableObject {
     private func applySwitched(to id: Int) async {
         activeShopId = id
         shopEpoch += 1   // ответы, начатые до переключения, больше не применяются
+        IdempotencyKeys.shared.forgetAll()   // запрос в другом магазине — другое действие, ключ прежнего не берём
         resetPause()
         DeepLinkRouter.shared.reset()
         NewOrderPoller.shared.shopChanged()

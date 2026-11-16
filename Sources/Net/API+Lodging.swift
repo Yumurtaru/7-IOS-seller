@@ -108,6 +108,8 @@ extension API {
         if let u = unitId, u > 0 { q["unit_id"] = String(u) }
         q["page"] = String(max(1, page))
         q["per_page"] = String(perPage)
+        // Старый сервер page/per_page не знает и без limit отдаёт 100 (а не 200, как Android): берём максимум.
+        q["limit"] = "200"
         return try await get("api/seller/lodging-bookings", query: q, as: LodgingBookingsResponse.self)
     }
 

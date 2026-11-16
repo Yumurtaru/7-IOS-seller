@@ -52,10 +52,12 @@ final class ReviewsViewModel: ObservableObject {
         guard hasMore, !loadingMore, state == .loaded else { return }
         loadingMore = true
         let myGen = loadGen
+        let myPage = page
         defer { loadingMore = false }
         do {
             let res = try await API.shared.reviewsPage(status: statusFilter, page: page + 1, limit: Self.perPage)
-            guard myGen == loadGen else { return }
+            // Обновление списка во время догрузки сбросило page на 1 — страница уже не следующая (иначе дыра и сбитый счётчик).
+            guard myGen == loadGen, myPage == page else { return }
             page += 1
             let known = Set(items.compactMap { $0.id })
             items += res.items.filter { r in r.id.map { !known.contains($0) } ?? true }
