@@ -74,6 +74,26 @@ final class OrderDetailViewModel: ObservableObject {
         }
     }
 
+    /// К-65: «Подать курс N». Пока идёт запрос - isActing блокирует повторное
+    /// нажатие; после ответа (в т.ч. already:true) заказ перечитываем.
+    func serveCourse(_ course: Int) async -> Bool {
+        guard !isActing else { return false }
+        isActing = true
+        actionError = nil
+        defer { isActing = false }
+        do {
+            _ = try await API.shared.serveCourse(id: orderId, course: course)
+            await load()
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            actionError = error.localizedDescription   // текст сервера (409/422/403)
+            await load()
+            return false
+        }
+    }
+
     /// Правка состава: шлём только изменённые строки, суммы пересчитывает сервер.
     /// Любая ошибка (в том числе 409 «заказ уже изменили») заканчивается
     /// перечитыванием заказа — на экране всегда актуальные данные.
@@ -431,6 +451,10 @@ struct OrderDetailView: View {
         let noCourierOnRoute = o.status == "in_delivery" && (o.courierId ?? 0) <= 0
         let cancellable = lodging == nil && (OrderStatuses.canCancel(o.status) || noCourierOnRoute)
             && Session.shared.can("orders.cancel")
+        // К-65: ближайший ждущий курс; кнопка, пока заказ не закрыт и есть право.
+        let serveNext: Int? = (lodging == nil && o.status != "done" && o.status != "cancelled"
+                               && Session.shared.can("orders.status"))
+            ? (o.items ?? []).filter { $0.courseWait == true }.compactMap { $0.course }.min() : nil
         return Group {
             if let lg = lodging {
                 VStack(alignment: .leading, spacing: 4) {
@@ -447,8 +471,22 @@ struct OrderDetailView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if !next.isEmpty || cancellable {
+            if !next.isEmpty || cancellable || serveNext != nil {
                 VStack(spacing: 8) {
+                    if let course = serveNext {
+                        Button {
+                            Task { if await vm.serveCourse(course) { onChanged?() } }
+                        } label: {
+                            Text("Подать курс \(course)")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                        }
+                        .background(Brand.accent)
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .disabled(vm.isActing)
+                    }
                     ForEach(next, id: \.self) { status in
                         Button {
                             Task { if await vm.setStatus(status) { onChanged?() } }
@@ -524,6 +562,11 @@ struct OrderDetailView: View {
                         Text(Money.rub(item.price))
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(Brand.text)
+                    }
+                    if item.courseWait == true {
+                        Text(item.course.map { "Курс \($0) — ждёт подачи" } ?? "Ждёт подачи")
+                            .font(.caption)
+                            .foregroundColor(Brand.accent)
                     }
                     ForEach(mods.indices, id: \.self) { i in
                         let m = mods[i]

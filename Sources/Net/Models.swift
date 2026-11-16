@@ -685,9 +685,16 @@ struct OrderItem: Decodable, Identifiable {
     /// П-72 п.4: выбор клиента «если нет» (similar|call|remove) и предложенная замена.
     var substitution: String?
     var substitute: SubstituteInfo?
+    /// К-65: курс подачи (1-5, nil - без курса), «ждёт подачи» и время подачи.
+    /// Старый сервер / база без колонок зала ключей не шлёт - всё необязательное.
+    @LenientInt var course: Int?
+    @LenientBool var courseWait: Bool?
+    var courseServedAt: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, price, qty, unit, substitution, substitute
+        case name, price, qty, unit, substitution, substitute, course
+        case courseWait = "course_wait"
+        case courseServedAt = "course_served_at"
         case lineId = "id"
         case productId = "product_id"
         case qtyOrdered = "qty_ordered"

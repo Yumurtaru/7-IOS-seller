@@ -93,6 +93,12 @@ extension API {
         try await get("api/seller/orders/\(id)", as: OrderDetail.self)
     }
 
+    /// К-65: «Подать курс N» - POST orders/{id}/serve-course {"course": N}.
+    /// Ответ ({order_id, course, lines, served, already}) не нужен: заказ перечитываем.
+    func serveCourse(id: Int, course: Int) async throws -> BoolAck {
+        try await post("api/seller/orders/\(id)/serve-course", body: ["course": course], as: BoolAck.self)
+    }
+
     func setOrderStatus(id: Int, status: String) async throws -> StatusAck {
         try await post("api/seller/orders/\(id)/status", body: ["status": status], as: StatusAck.self)
     }
