@@ -662,8 +662,29 @@ struct OrderDetailView: View {
     // ── Клиент ───────────────────────────────────────────────────────────────
     private func clientCard(_ o: OrderDetail) -> some View {
         Group {
-            if o.client != nil || o.clientPhone != nil {
+            if o.client != nil || o.clientPhone != nil || o.leaveAtDoor == true
+                || !(o.recipientName ?? "").isEmpty || !(o.recipientPhone ?? "").isEmpty {
                 SectionCard(title: "Клиент") {
+                    if o.leaveAtDoor == true {
+                        Label("Оставить у двери", systemImage: "door.left.hand.closed")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(Brand.green)
+                    }
+                    if let rn = o.recipientName, !rn.isEmpty {
+                        InfoRow(label: "Получатель", value: rn)
+                    }
+                    if let rp = o.recipientPhone, !rp.isEmpty,
+                       let rurl = URL(string: "tel://" + rp.filter { "+0123456789".contains($0) }) {
+                        Link(destination: rurl) {
+                            HStack {
+                                Image(systemName: "phone.fill")
+                                Text(rp).font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text("Позвонить получателю").font(.caption).foregroundColor(Brand.muted)
+                            }
+                            .foregroundColor(Brand.green)
+                        }
+                    }
                     if let name = o.client, !name.isEmpty {
                         InfoRow(label: "Имя", value: name)
                     }

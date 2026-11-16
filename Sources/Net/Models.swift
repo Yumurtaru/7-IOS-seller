@@ -479,8 +479,15 @@ struct OrderDetail: Decodable {
     /// П-72 п.4: выбор клиента по умолчанию (similar|call|remove) и срок ответа. Старый сервер — nil.
     var substitutionDefault: String?
     var substitutionDeadlineAt: String?
+    /// П-83 пп. 7 и 9: «Оставить у двери» и заказ для другого человека. Старый сервер не шлёт — nil.
+    @LenientBool var leaveAtDoor: Bool?
+    @LenientString var recipientName: String?
+    @LenientString var recipientPhone: String?
 
     enum CodingKeys: String, CodingKey {
+        case leaveAtDoor = "leave_at_door"
+        case recipientName = "recipient_name"
+        case recipientPhone = "recipient_phone"
         case substitutionDefault = "substitution_default"
         case substitutionDeadlineAt = "substitution_deadline_at"
         case id, status, subtotal, discount, total, comment, client, address, items, log, rev, changes, lodging, tip
