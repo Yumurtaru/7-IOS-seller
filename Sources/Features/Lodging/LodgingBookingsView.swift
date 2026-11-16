@@ -377,7 +377,7 @@ private struct LodgingBookingCard: View {
 
     /// Только переходы, которые разрешает сервер для текущего статуса И для
     /// текущей даты (Lodging::cancelBlocked):
-    ///   • «Незаезд» — не раньше дня заезда и не позже конца проживания;
+    ///   • «Незаезд» — не раньше дня заезда (после конца проживания сервер тоже разрешает);
     ///   • «Отменить» подтверждённую — только до дня заезда, дальше сервер
     ///     отвечает «отметьте Заселён или Незаезд».
     /// Без этих окон продавец жал кнопку и получал 422 на ровном месте.
@@ -449,7 +449,6 @@ private struct LodgingBookingCard: View {
         // раньше или позже сервера.
         let today = DateFmt.ymdMoscow(Date())
         let from = String((booking.dateFrom ?? "").prefix(10))
-        let to = String((booking.dateTo ?? "").prefix(10))
         // Права ровно те, что проверяет сервер: отмена и незаезд — «Отмена
         // заказов», остальные переходы — «Смена статуса». Иначе сотрудник жал
         // кнопку и получал «Недостаточно прав».
@@ -470,7 +469,8 @@ private struct LodgingBookingCard: View {
             if canCancel { out.append(("cancelled", "Отменить", Brand.red)) }
         case "confirmed":
             if canStatus && checkInOpensYmd == nil { out.append(("checked_in", "Заселить", Brand.green)) }
-            if canCancel && today >= from && today <= to {
+            // Сервер разрешает незаезд и после выезда (окно не закрыто) — как Android.
+            if canCancel && today >= from {
                 out.append(("no_show", "Незаезд", Brand.amber))
             }
             if canCancel && today <= from {

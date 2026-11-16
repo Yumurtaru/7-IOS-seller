@@ -13,8 +13,14 @@ enum ImageCompressor {
         // в 4800 px и многомегабайтный JPEG. Нам нужны реальные пиксели.
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
+        // Прозрачный PNG в JPEG давал чёрный фон (как было на Android): рисуем на белом непрозрачном холсте.
+        format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: target, format: format)
-        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+        let resized = renderer.image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: target))
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
         return resized.jpegData(compressionQuality: quality)
     }
 }

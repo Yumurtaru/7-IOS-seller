@@ -75,7 +75,7 @@ final class DocumentEditViewModel: ObservableObject {
     @Published var probeBusy = false
     @Published var infos: [String: PriceInfoItem] = [:]
     @Published var supplierDocNo = ""
-    @Published var supplierDocDate = Date() {
+    @Published var supplierDocDate = ShopTime.todayDate() {   // «сегодня» по поясу заведения, не телефона
         didSet { supplierDocDateSet = true }
     }
     /// А1328: дату накладной задавали (есть в документе или менял DatePicker); иначе repost ключ не трогает.

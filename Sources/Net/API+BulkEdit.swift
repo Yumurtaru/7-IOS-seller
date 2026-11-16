@@ -18,6 +18,7 @@ extension API {
         try await postBodyKeyed("api/seller/products/bulk-edit",
                                 body: ["ids": ids, "changes": changes],
                                 idempotencyKey: key,
+                                long: true,   // сотни товаров в одной правке: обычные 20 с обрывали ответ (Android — 120 с)
                                 as: BulkEditResult.self)
     }
 

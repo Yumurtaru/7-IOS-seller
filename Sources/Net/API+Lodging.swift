@@ -97,6 +97,8 @@ extension API {
         var q: [String: String] = [:]
         if let s = status, !s.isEmpty { q["status"] = s }
         if let u = unitId, u > 0 { q["unit_id"] = String(u) }
+        // Сервер: limit по умолчанию 100, максимум 200 — берём максимум, как Android.
+        q["limit"] = "200"
         return try await get("api/seller/lodging-bookings", query: q, as: LodgingBookingsResponse.self)
     }
 

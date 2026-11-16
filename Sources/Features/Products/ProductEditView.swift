@@ -483,6 +483,8 @@ final class ProductEditViewModel: ObservableObject {
         }
         guard photos.count < 5 else { error = "Максимум 5 фото"; return }
         guard !isUploading else { return }   // два снимка подряд: лимит 5 проверялся до ответа первого
+        // Идёт перестановка: её ответ перезаписал бы список и стёр только что загруженное фото.
+        guard !reorderingPhotos else { error = "Дождитесь, пока сохранится порядок фото"; return }
         isUploading = true
         error = nil
         defer { isUploading = false }
@@ -505,7 +507,7 @@ final class ProductEditViewModel: ObservableObject {
     @Published private(set) var deletingPhotoIds: Set<Int> = []
 
     func deletePhoto(_ photo: ProductPhoto) async {
-        guard let id = productId, !deletingPhotoIds.contains(photo.photoId) else { return }
+        guard let id = productId, !deletingPhotoIds.contains(photo.photoId), !reorderingPhotos else { return }   // при перестановке ответ вернул бы удалённое
         deletingPhotoIds.insert(photo.photoId)
         defer { deletingPhotoIds.remove(photo.photoId) }
         do {
@@ -522,7 +524,7 @@ final class ProductEditViewModel: ObservableObject {
     /// Переставить фото (первое — главное на витрине): POST photos/reorder.
     /// Порядок на экране меняем только после ответа сервера.
     func movePhoto(_ photo: ProductPhoto, to index: Int) async {
-        guard let id = productId, !reorderingPhotos,
+        guard let id = productId, !reorderingPhotos, !isUploading, deletingPhotoIds.isEmpty,
               let from = photos.firstIndex(where: { $0.photoId == photo.photoId }),
               index >= 0, index < photos.count, index != from else { return }
         var next = photos

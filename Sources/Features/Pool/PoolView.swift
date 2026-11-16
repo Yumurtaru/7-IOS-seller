@@ -106,7 +106,8 @@ final class PoolCallsViewModel: ObservableObject {
             calls += list.filter { !known.contains($0.callId) }
             canLoadMore = list.count >= Self.perPage
         } catch {
-            canLoadMore = false
+            // Ошибка догрузки старого фильтра не должна гасить «ещё» у нового списка.
+            if my == gen { canLoadMore = false }
         }
     }
 

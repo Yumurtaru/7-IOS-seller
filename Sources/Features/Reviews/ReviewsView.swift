@@ -18,6 +18,11 @@ final class ReviewsViewModel: ObservableObject {
         didSet { if statusFilter != oldValue { items = []; state = .loading; loadGen += 1; Task { await load() } } }
     }
     @Published var error: String?
+    /// «Показать ещё»: сервер отдаёт страницы по 50 (meta.has_more).
+    @Published var hasMore = false
+    @Published var loadingMore = false
+    private var page = 1
+    private static let perPage = 50
 
     static let statusChips: [(String?, String)] = [
         (nil, "Все"), ("pending", "На модерации"), ("approved", "Опубликованы"), ("rejected", "Отклонены"),
@@ -28,15 +33,35 @@ final class ReviewsViewModel: ObservableObject {
         let myGen = loadGen
         if items.isEmpty { state = .loading }
         do {
-            let fresh = try await API.shared.reviews(status: statusFilter)
+            let res = try await API.shared.reviewsPage(status: statusFilter, page: 1, limit: Self.perPage)
             guard myGen == loadGen else { return }
-            items = fresh
+            items = res.items
+            page = 1
+            hasMore = res.hasMore
             state = .loaded
         } catch is CancellationError {
             if myGen == loadGen && state == .loading { state = .idle }   // отмена: спиннер не должен висеть
         } catch {
             guard myGen == loadGen else { return }
             state = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Догрузка следующей страницы без дублей; ответ, пришедший после обновления/смены фильтра, отбрасываем.
+    func loadMore() async {
+        guard hasMore, !loadingMore, state == .loaded else { return }
+        loadingMore = true
+        let myGen = loadGen
+        defer { loadingMore = false }
+        do {
+            let res = try await API.shared.reviewsPage(status: statusFilter, page: page + 1, limit: Self.perPage)
+            guard myGen == loadGen else { return }
+            page += 1
+            let known = Set(items.compactMap { $0.id })
+            items += res.items.filter { r in r.id.map { !known.contains($0) } ?? true }
+            hasMore = res.hasMore
+        } catch {
+            // Сбой догрузки: список остаётся, «ещё» не гасим — можно повторить прокруткой.
         }
     }
 
@@ -64,6 +89,18 @@ struct ReviewsView: View {
                 ForEach(vm.items) { review in
                     ReviewRow(review: review) { replyTarget = review }
                         .listRowBackground(Brand.card)
+                        .onAppear { if review.id == vm.items.last?.id { Task { await vm.loadMore() } } }
+                }
+                if vm.hasMore {
+                    Button { Task { await vm.loadMore() } } label: {
+                        HStack {
+                            Spacer()
+                            if vm.loadingMore { ProgressView() } else { Text("Показать ещё") }
+                            Spacer()
+                        }
+                    }
+                    .disabled(vm.loadingMore)
+                    .listRowBackground(Brand.card)
                 }
             }
             .listStyle(.insetGrouped)

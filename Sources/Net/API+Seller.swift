@@ -412,6 +412,16 @@ extension API {
         return try await get("api/seller/reviews", query: q, as: [SellerReview].self)
     }
 
+    /// Страница отзывов (page, limit; meta.has_more). Старый сервер параметры игнорирует и
+    /// отдаёт до 200 разом без has_more — тогда «ещё» нет.
+    func reviewsPage(status: String?, page: Int, limit: Int) async throws -> (items: [SellerReview], hasMore: Bool) {
+        var q: [String: String] = ["page": String(page), "limit": String(limit)]
+        if let s = status, !s.isEmpty { q["status"] = s }
+        let (rows, meta) = try await getWithMeta("api/seller/reviews", query: q, as: [SellerReview].self)
+        let more = (meta["has_more"] as? Bool) ?? ((meta["has_more"] as? NSNumber)?.boolValue ?? false)
+        return (rows, more)
+    }
+
     func replyToReview(id: Int, text: String) async throws {
         _ = try await post("api/seller/reviews/\(id)/reply", body: ["text": text], as: Phase2BoolAck.self)
     }

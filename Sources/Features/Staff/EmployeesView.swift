@@ -273,6 +273,7 @@ struct EmployeeEditSheet: View {
                 Section("Сотрудник") {
                     TextField("ФИО", text: $fullName)
                     TextField("Телефон", text: $phone.phoneInput).keyboardType(.phonePad)
+                        .disabled(employee != nil && !canPin)   // телефон меняет владелец (иначе 403), как на Android
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)

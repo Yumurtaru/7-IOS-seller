@@ -180,11 +180,14 @@ final class ExportJobViewModel: ObservableObject {
         guard let id = job?.jobId else { return }
         do {
             let r = try await API.shared.expJob(id: id)
+            // Поздний ответ прежнего задания (за это время открыли/запустили другое) не рисуем.
+            guard job?.jobId == id else { return }
             if let j = r.job { job = j }
             failStreak = 0
             netWait = false
         } catch is CancellationError {
         } catch {
+            guard job?.jobId == id else { return }   // ошибка чужого (старого) задания
             if ExpLogic.isTransient(error) {
                 failStreak += 1
                 netWait = true
