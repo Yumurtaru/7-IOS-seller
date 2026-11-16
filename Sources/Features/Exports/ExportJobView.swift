@@ -33,6 +33,8 @@ final class ExportJobViewModel: ObservableObject {
     @Published var notice: String?
 
     private var pollTask: Task<Void, Never>?
+    /// Ключи повтора запуска выгрузки (живут, пока жив экран; см. run()).
+    private let runKeys = IdempotencyKeys.form()
     private var pollGen = 0
     private var failStreak = 0
     /// Начало отсчёта 10 минут опроса: не сбрасывается уходом с экрана (как на Android).
@@ -122,15 +124,26 @@ final class ExportJobViewModel: ObservableObject {
         failStreak = 0
         pollBegan = nil
         defer { starting = false }
+        // А1436: ключ повтора создаётся ДО отправки и живёт до окончательного ответа;
+        // изменили вид/колонки/фильтры/формат — это новое действие, ключ новый.
+        let cleaned = ExpLogic.cleanFilters(filters)
+        let fp = kind + "|" + columns.joined(separator: ",") + "|" + format + "|"
+            + cleaned.keys.sorted().map { "\($0)=\(cleaned[$0] ?? "")" }.joined(separator: "&")
+        let key = runKeys.key(for: fp)
         do {
             let r = try await API.shared.expRun(kind: kind, columns: columns,
-                                                filters: ExpLogic.cleanFilters(filters), format: format)
+                                                filters: cleaned, format: format,
+                                                idempotencyKey: key)
+            runKeys.forget(fp)
             job = r.job
             if r.job == nil { notice = ExpLogic.failedTitle } else if isRunning { startPolling() }
             await loadRecent()
         } catch is CancellationError {
         } catch {
             let unknown = ExpLogic.isUnknownOutcome(error)
+            // Окончательный ответ сервера (не обрыв/таймаут/5xx) — действие закончено, ключ не нужен.
+            // 409 idempotency_in_progress — первый запрос ещё идёт: ключ оставляем.
+            if !unknown && SellerNewErrors.code(error) != "idempotency_in_progress" { runKeys.forget(fp) }
             formError = ExpLogic.errorText(error) + (unknown ? "\n" + ExpLogic.unknownStart : "")
             if unknown { await loadRecent() }
         }

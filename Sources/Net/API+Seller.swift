@@ -126,8 +126,14 @@ extension API {
         return try await get("api/seller/orders/\(id)/chat", query: q, as: [ChatMessage].self)
     }
 
-    func sendChatMessage(orderId: Int, message: String) async throws -> BoolAck {
-        try await post("api/seller/orders/\(orderId)/chat", body: ["message": message], as: BoolAck.self)
+    /// А1437: keys — ключи повтора экрана чата (IdempotencyKeys.form()): повтор после обрыва
+    /// уходит с тем же ключом, и клиент не получает сообщение дважды. nil — как раньше.
+    func sendChatMessage(orderId: Int, message: String, keys: IdempotencyKeys? = nil) async throws -> BoolAck {
+        if let keys {
+            return try await postKeyed("api/seller/orders/\(orderId)/chat", body: ["message": message],
+                                       as: BoolAck.self, keys: keys)
+        }
+        return try await post("api/seller/orders/\(orderId)/chat", body: ["message": message], as: BoolAck.self)
     }
 
     // ── Товары (routes/seller_products.php) ──────────────────────────────────

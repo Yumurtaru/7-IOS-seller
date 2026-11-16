@@ -15,6 +15,9 @@ final class OrderChatViewModel: ObservableObject {
     @Published var isSending = false
 
     let orderId: Int
+    /// А1437: ключи повтора отправки (ключ на текст: тот же текст после обрыва — тот же ключ,
+    /// после ответа сервера ключ забывается, следующее сообщение — новое действие).
+    private let sendKeys = IdempotencyKeys.form()
     private var pollTask: Task<Void, Never>?
     /// Ушли в фон (или закрыли) во время первой загрузки — опрос после неё не запускаем.
     private var paused = false
@@ -99,7 +102,7 @@ final class OrderChatViewModel: ObservableObject {
         sendError = nil
         defer { isSending = false }
         do {
-            _ = try await API.shared.sendChatMessage(orderId: orderId, message: text)
+            _ = try await API.shared.sendChatMessage(orderId: orderId, message: text, keys: sendKeys)
             // Пока сообщение уходило, могли допечатать новое — его не стираем.
             // Отправленное убираем из начала поля, допечатанное после — оставляем
             // (иначе следующая отправка повторяла уже ушедший текст).

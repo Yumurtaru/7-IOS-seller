@@ -377,6 +377,17 @@ struct LodgingBooking: Decodable, Identifiable, Hashable {
 struct LodgingBookingsResponse: Decodable {
     let items: [LodgingBooking]?
     let today: LodgingToday?
+    // А1434 (аддитивно): поля страницы приходят только при page/per_page в запросе.
+    // Старый сервер их не присылает -> nil (список считается целым, «Показать ещё» нет).
+    @LenientInt var page: Int?
+    @LenientInt var perPage: Int?
+    @LenientBool var hasMore: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case items, today, page
+        case perPage = "per_page"
+        case hasMore = "has_more"
+    }
 }
 
 struct LodgingBookingCreatedAck: Decodable {

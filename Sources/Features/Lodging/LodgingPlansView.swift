@@ -32,14 +32,14 @@ final class LodgingPlansViewModel: ObservableObject {
         }
     }
 
-    func save(id: Int?, body: [String: Any?]) async -> Bool {
+    func save(id: Int?, body: [String: Any?], keys: IdempotencyKeys? = nil) async -> Bool {
         error = nil
         info = nil
         do {
             if let id = id {
                 try await API.shared.updateLodgingRatePlan(id: id, body: body)
             } else {
-                _ = try await API.shared.createLodgingRatePlan(unitId: unitId, body: body)
+                _ = try await API.shared.createLodgingRatePlan(unitId: unitId, body: body, keys: keys)
             }
             await load()
             return true
@@ -242,6 +242,8 @@ private struct LodgingPlanSheet: View {
     @State private var prepayPct = ""
     @State private var isActive = true
     @State private var isSaving = false
+    /// А1435: ключи повтора окна (живут, пока окно открыто).
+    @State private var idem = IdempotencyKeys.form()
 
     var body: some View {
         NavigationStack {
@@ -392,6 +394,6 @@ private struct LodgingPlanSheet: View {
         if !Session.shared.can("products.price") {
             for k in ["price_mode", "price_value", "prepay_pct"] { body.removeValue(forKey: k) }
         }
-        if await vm.save(id: plan?.id, body: body) { dismiss() }
+        if await vm.save(id: plan?.id, body: body, keys: idem) { dismiss() }
     }
 }

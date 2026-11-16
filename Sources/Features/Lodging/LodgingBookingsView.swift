@@ -32,39 +32,93 @@ final class LodgingBookingsViewModel: ObservableObject {
     /// «Ожидают» приходил последним и перезатирал список «Заселены».
     private var task: Task<Void, Never>?
 
+    // А1434: постраничная загрузка. На странице 50 броней; «Показать ещё» дозапрашивает
+    // следующую. Счётчик gen растёт при каждом перечитывании/смене чипа: ответ с
+    // устаревшим gen (старый фильтр, обновление поверх догрузки) отбрасывается.
+    static let pageSize = 50
+    private var gen = 0
+    private var page = 1
+    /// Есть ли ещё страницы. Старый сервер has_more не шлёт -> false (список целый, как раньше).
+    @Published var hasMore = false
+    @Published var loadingMore = false
+    /// Сбой догрузки: список не стираем, показываем под ним с «Повторить».
+    @Published var moreError: String?
+
     func load() async {
         task?.cancel()
+        gen += 1
+        loadingMore = false
+        moreError = nil
         if items.isEmpty { state = .loading }
         error = nil
         info = nil
         let asked = status
+        let my = gen
         let t = Task { @MainActor in
-            await self.reload(asked)
+            await self.reload(asked, gen: my)
         }
         task = t
         await t.value
     }
 
-    private func reload(_ asked: String) async {
+    private func reload(_ asked: String, gen my: Int) async {
         do {
-            let resp = try await API.shared.lodgingBookings(status: asked.isEmpty ? nil : asked)
+            let resp = try await API.shared.lodgingBookings(status: asked.isEmpty ? nil : asked,
+                                                           page: 1, perPage: Self.pageSize)
             // Ответ устаревшего запроса не применяем.
-            guard !Task.isCancelled, asked == status else { return }
-            items = resp.items ?? []
-            today = resp.today
+            guard !Task.isCancelled, asked == status, my == gen else { return }
+            items = Self.unique(resp.items ?? [])
+            today = resp.today   // «сегодня» — только с первой страницы
+            page = 1
+            hasMore = resp.hasMore ?? false
             state = .loaded
         } catch is CancellationError {
         } catch {
             // Ошибка запроса по прежнему чипу — уже не про то, что на экране.
-            guard asked == status else { return }
+            guard asked == status, my == gen else { return }
             if items.isEmpty { state = .failed(error.localizedDescription) }
             else { self.error = error.localizedDescription }
         }
     }
 
+    /// «Показать ещё»: следующая страница. Дубли по id отбрасываем (бронь могла
+    /// сдвинуться между страницами), сбой не стирает уже загруженное.
+    func loadMore() async {
+        guard hasMore, !loadingMore, state == .loaded else { return }
+        let asked = status
+        let my = gen
+        let next = page + 1
+        loadingMore = true
+        moreError = nil
+        do {
+            let resp = try await API.shared.lodgingBookings(status: asked.isEmpty ? nil : asked,
+                                                           page: next, perPage: Self.pageSize)
+            guard !Task.isCancelled, asked == status, my == gen else { return }
+            let known = Set(items.map { $0.id })
+            let add = Self.unique((resp.items ?? []).filter { !known.contains($0.id) })
+            items += add
+            page = next
+            // Страница из одних дублей при has_more=true — идём дальше, но не зацикливаемся:
+            // has_more приходит от сервера, следующая страница сдвинется.
+            hasMore = resp.hasMore ?? false
+            loadingMore = false
+        } catch is CancellationError {
+            if my == gen { loadingMore = false }
+        } catch {
+            guard my == gen else { return }
+            loadingMore = false
+            moreError = error.localizedDescription
+        }
+    }
+
+    private static func unique(_ list: [LodgingBooking]) -> [LodgingBooking] {
+        var seen = Set<Int>()
+        return list.filter { seen.insert($0.id).inserted }
+    }
+
     func setStatus(_ s: String) {
         // Новый чип — старые брони убираем: при сбое под «Заселены» оставались «Ожидают».
-        if s != status { items = [] }
+        if s != status { items = []; hasMore = false; moreError = nil }
         status = s
         Task { await load() }
     }
@@ -192,6 +246,11 @@ struct LodgingBookingsView: View {
                         }
                         .listRowBackground(Brand.card)
                     }
+                    // А1434: «Показать ещё» — только если сервер сказал has_more.
+                    if vm.hasMore || vm.moreError != nil {
+                        moreRow
+                            .listRowBackground(Brand.card)
+                    }
                 }
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
@@ -241,6 +300,27 @@ struct LodgingBookingsView: View {
                 guard t == "orders" else { return }
                 if vm.status.isEmpty { Task { await vm.load() } } else { vm.setStatus("") }
             }
+        }
+    }
+
+    private var moreRow: some View {
+        VStack(spacing: 6) {
+            if let e = vm.moreError {
+                Text(e).font(.footnote).foregroundColor(Brand.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Button {
+                Task { await vm.loadMore() }
+            } label: {
+                HStack {
+                    Spacer()
+                    if vm.loadingMore { ProgressView() }
+                    else { Text(vm.moreError == nil ? "Показать ещё" : "Повторить").font(.subheadline.weight(.semibold)) }
+                    Spacer()
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(vm.loadingMore)
         }
     }
 

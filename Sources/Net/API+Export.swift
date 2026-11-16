@@ -25,10 +25,17 @@ extension API {
     }
 
     /// Запуск. До 3000 строк файл готовится прямо в запросе (до 25 с на сервере), поэтому ждём до 90 с. Без повторов.
-    func expRun(kind: String, columns: [String], filters: [String: String], format: String) async throws -> ExpJobReply {
-        try await postDetailedLong(API.exps + "/\(kind)/run",
-                                   body: ["columns": columns, "filters": filters, "format": format],
-                                   as: ExpJobReply.self)
+    /// А1436: с ключом повтора (idempotencyKey ведёт экран): повтор после обрыва не создаёт второе задание.
+    /// nil — как раньше, без ключа. Отказы — APIDetailedError (как у postDetailedLong) либо IdempotencyError (ключ).
+    func expRun(kind: String, columns: [String], filters: [String: String], format: String,
+                idempotencyKey: String? = nil) async throws -> ExpJobReply {
+        let body: [String: Any?] = ["columns": columns, "filters": filters, "format": format]
+        if let key = idempotencyKey, !key.isEmpty {
+            return try await postBodyKeyed(API.exps + "/\(kind)/run", body: body,
+                                           idempotencyKey: key, detailedErrors: true, long: true,
+                                           as: ExpJobReply.self)
+        }
+        return try await postDetailedLong(API.exps + "/\(kind)/run", body: body, as: ExpJobReply.self)
     }
 
     /// Опрос: ответ ждём до 45 с, без повторов (следующий тик повторит сам).

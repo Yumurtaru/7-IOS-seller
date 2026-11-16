@@ -63,8 +63,13 @@ extension API {
         try await get("api/seller/lodging/units/\(unitId)/rate-plans", as: [LodgingRatePlan].self)
     }
 
-    func createLodgingRatePlan(unitId: Int, body: [String: Any?]) async throws -> IdAck {
-        try await post("api/seller/lodging/units/\(unitId)/rate-plans", body: body, as: IdAck.self)
+    /// А1435: keys — ключи окна тарифа (IdempotencyKeys.form()): повтор после обрыва без второго тарифа.
+    func createLodgingRatePlan(unitId: Int, body: [String: Any?], keys: IdempotencyKeys? = nil) async throws -> IdAck {
+        if let keys {
+            return try await postKeyed("api/seller/lodging/units/\(unitId)/rate-plans", body: body,
+                                       as: IdAck.self, keys: keys)
+        }
+        return try await post("api/seller/lodging/units/\(unitId)/rate-plans", body: body, as: IdAck.self)
     }
 
     func updateLodgingRatePlan(id: Int, body: [String: Any?]) async throws {
@@ -93,12 +98,16 @@ extension API {
 
     // MARK: Брони
 
-    func lodgingBookings(status: String?, unitId: Int? = nil) async throws -> LodgingBookingsResponse {
+    /// А1434: постранично (page от 1, per_page = 50). Новый сервер отвечает
+    /// {items, today, page, per_page, has_more}; старый игнорирует page/per_page и шлёт
+    /// прежние до 100 броней без has_more — экран тогда считает список целым.
+    func lodgingBookings(status: String?, unitId: Int? = nil, page: Int = 1,
+                         perPage: Int = 50) async throws -> LodgingBookingsResponse {
         var q: [String: String] = [:]
         if let s = status, !s.isEmpty { q["status"] = s }
         if let u = unitId, u > 0 { q["unit_id"] = String(u) }
-        // Сервер: limit по умолчанию 100, максимум 200 — берём максимум, как Android.
-        q["limit"] = "200"
+        q["page"] = String(max(1, page))
+        q["per_page"] = String(perPage)
         return try await get("api/seller/lodging-bookings", query: q, as: LodgingBookingsResponse.self)
     }
 
