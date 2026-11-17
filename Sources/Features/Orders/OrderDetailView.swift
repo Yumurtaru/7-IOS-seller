@@ -452,9 +452,11 @@ struct OrderDetailView: View {
         let cancellable = lodging == nil && (OrderStatuses.canCancel(o.status) || noCourierOnRoute)
             && Session.shared.can("orders.cancel")
         // К-65: ближайший ждущий курс; кнопка, пока заказ не закрыт и есть право.
-        let serveNext: Int? = (lodging == nil && o.status != "done" && o.status != "cancelled"
-                               && Session.shared.can("orders.status"))
-            ? (o.items ?? []).filter { $0.courseWait == true }.compactMap { $0.course }.min() : nil
+        // Разбито на шаги: длинная цепочка в одном тернарном выражении — риск таймаута проверки типов в Xcode 26.
+        let canServe: Bool = lodging == nil && o.status != "done" && o.status != "cancelled"
+            && Session.shared.can("orders.status")
+        let waitingCourses: [Int] = (o.items ?? []).filter { $0.courseWait == true }.compactMap { $0.course }
+        let serveNext: Int? = canServe ? waitingCourses.filter { (1...5).contains($0) }.min() : nil
         return Group {
             if let lg = lodging {
                 VStack(alignment: .leading, spacing: 4) {
