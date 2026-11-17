@@ -6,6 +6,8 @@
   3. ПРОБЕЛЫ: пробел только с одной стороны «=», «==», «&&»… (`let a =f()`).
   4. СКОРОСТЬ: длинная склейка строк «+» внутри Text(…) — Xcode 26 не успевает
      проверить типы. Склеивать интерполяцией.
+  6. ASYNC: UIApplication.shared.open(url) без await в Task/async — completionHandler-вариант.
+  7. СКОРОСТЬ: Task { if let … = await … } прямо в Button — вынести в private func.
 Запуск: из папки проекта `T=Sources py -3 tools/check_ios_build.py`
 (админке и курьеру — тот же файл из 8 IOS-client-new/tools).
 
@@ -209,6 +211,46 @@ for f, text in code.items():
                 break
         if not ok:
             add('ПОТОК', f, i + 1, 'DataScannerViewController.isSupported/isAvailable — только в @MainActor (пометить член или тип)')
+
+# 6) UIApplication.shared.open(url) с ОДНИМ аргументом в async-контексте (Task { … }, async func):
+#    Xcode 26 выбирает async-перегрузку и требует await — «expression is 'async' but is not marked
+#    with 'await'» (NotifyTelegramSection.swift, сборка покупателя 17.11.2026). Правильно:
+#    UIApplication.shared.open(url, options: [:], completionHandler: nil) — синхронно и с iOS 10.
+OPEN1 = re.compile(r'UIApplication\.shared\.open\(\s*[^,()]+(\([^()]*\))?\s*\)')
+TASK_OPEN = re.compile(r'\bTask\s*(\.detached)?\s*(\(|\{)')
+for f, text in code.items():
+    lines = text.split('\n')
+    for i, ln in enumerate(lines):
+        m = OPEN1.search(ln)
+        if not m:
+            continue
+        before = ln[:m.start()]
+        is_async = False
+        start = i - 1
+        if TASK_OPEN.search(before):
+            is_async, start = True, -1
+        elif re.search(r'\bButton\s*(\(|\{)|\.onTapGesture|\bfunc\b', before):
+            start = -1
+        for k in range(start, max(-1, i - 40), -1):
+            x = lines[k]
+            if TASK_OPEN.search(x):
+                is_async = True; break
+            if re.search(r'\bfunc\b', x):
+                is_async = 'async' in x; break
+            if re.search(r'\bButton\s*(\(|\{)|\.onTapGesture|\.onReceive|\bDispatchQueue\b', x):
+                break
+        if is_async:
+            add('ASYNC', f, i + 1, 'open(url) в async-контексте — open(url, options: [:], completionHandler: nil)')
+
+# 7) Task { if let x = await … { состояние = … } } прямо в замыкании Button внутри большого body:
+#    «the compiler is unable to type-check this expression in reasonable time» (DocumentsView.swift,
+#    сборка продавца 17.11.2026). Правильно: вынести в private func вью (Task { @MainActor in … } там).
+INLINE_TASK = re.compile(r'\bTask\s*(\{|@MainActor\s+in)?[^}\n]*\{\s*if\s+let\s+\w+\s*=\s*await\b')
+for f, text in code.items():
+    lines = text.split('\n')
+    for i, ln in enumerate(lines):
+        if INLINE_TASK.search(ln) and any(re.search(r'\bButton\b', x) for x in lines[max(0, i - 2):i + 1]):
+            add('СКОРОСТЬ', f, i + 1, 'Task { if let … = await … } в Button — вынести в private func (Xcode 26 не успевает)')
 
 out.sort(key=lambda p: (p[0], p[1], p[2]))
 for kind, f, line, msg in out:

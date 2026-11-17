@@ -336,6 +336,14 @@ struct InvoiceOcrHomeView: View {
     @State private var pickingPdf = false
     @State private var openJob: Int?
 
+    /// Отправить страницы и открыть задание. Отдельной функцией: такое же замыкание с await прямо в Button
+    /// уронило сборку DocumentsView в Xcode 26 («unable to type-check … in reasonable time»).
+    private func uploadAndOpen() {
+        Task { @MainActor in
+            if let id = await vm.upload() { openJob = id }
+        }
+    }
+
     var body: some View {
         List {
             uploadSection
@@ -418,7 +426,7 @@ struct InvoiceOcrHomeView: View {
             }
             if !vm.attachments.isEmpty {
                 Button {
-                    Task { if let id = await vm.upload() { openJob = id } }
+                    uploadAndOpen()
                 } label: {
                     HStack {
                         Text(vm.uploading ? OcrLogic.sending : OcrLogic.sendText(vm.attachments.count)).fontWeight(.semibold)

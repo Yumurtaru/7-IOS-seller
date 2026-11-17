@@ -167,6 +167,14 @@ struct DocumentsView: View {
     /// А316: отмена черновика (status → cancelled, без движений) — с вопросом.
     @State private var draftCancelTarget: StockDocument?
 
+    /// А1328: открыть проведённый документ — правка целиком или только даты (детали грузятся с сервера).
+    private func openPosted(_ d: StockDocument, dateOnly: Bool) {
+        Task { @MainActor in
+            guard let det = await vm.loadDetail(d) else { return }
+            sheet = dateOnly ? .date(det) : .edit(det)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             filters
@@ -237,14 +245,12 @@ struct DocumentsView: View {
                         // А1328: правка проведённого — нужны оба права (сервер: documents.post и documents.cancel).
                         if d.isPosted && Session.shared.can("documents.post") && Session.shared.can("documents.cancel") {
                             HStack(spacing: 12) {
-                                Button("Изменить") {
-                                    Task { if let det = await vm.loadDetail(d) { sheet = .edit(det) } }
-                                }
+                                // Вынесено в функцию: замыкание с await внутри большого ViewBuilder Xcode 26 не успевал
+                                // проверить по типам («unable to type-check this expression in reasonable time»).
+                                Button("Изменить") { openPosted(d, dateOnly: false) }
                                 .font(.caption.weight(.semibold))
                                 .buttonStyle(.borderless)
-                                Button("Изменить дату") {
-                                    Task { if let det = await vm.loadDetail(d) { sheet = .date(det) } }
-                                }
+                                Button("Изменить дату") { openPosted(d, dateOnly: true) }
                                 .font(.caption.weight(.semibold))
                                 .buttonStyle(.borderless)
                             }

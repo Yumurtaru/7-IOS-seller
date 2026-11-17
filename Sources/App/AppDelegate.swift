@@ -119,7 +119,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let info = response.notification.request.content.userInfo
         // E1: пуш «Вышла новая версия» (type = app_update) — по нажатию открываем ссылку на магазин.
         if let storeURL = Self.appUpdateURL(info) {
-            Task { @MainActor in UIApplication.shared.open(storeURL) }
+            // completionHandler-вариант: в Task Xcode 26 выбирает async-перегрузку open(_:) и требует await.
+            Task { @MainActor in UIApplication.shared.open(storeURL, options: [:], completionHandler: nil) }
         } else {
             Task { @MainActor in DeepLinkRouter.shared.handlePush(userInfo: info) }
         }
