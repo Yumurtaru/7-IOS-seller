@@ -505,7 +505,7 @@ struct OrderDetailView: View {
                     }
                     // Правка состава: не оказалось товара — уменьшаем количество,
                     // сервер пересчитывает сумму, клиент видит, что изменилось.
-                    if lodging == nil, (o.canEdit ?? false), (o.items ?? []).contains(where: { ($0.lineId ?? 0) > 0 }) {
+                    if lodging == nil, Session.shared.can("orders.status"), (o.canEdit ?? false), (o.items ?? []).contains(where: { ($0.lineId ?? 0) > 0 }) {
                         Button {
                             showEditSheet = true
                         } label: {

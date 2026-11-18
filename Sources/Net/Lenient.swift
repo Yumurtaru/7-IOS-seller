@@ -12,7 +12,7 @@ struct LenientDouble: Codable, Hashable {
         if c.decodeNil() { wrappedValue = nil }
         else if let d = try? c.decode(Double.self) { wrappedValue = d }
         else if let i = try? c.decode(Int.self) { wrappedValue = Double(i) }
-        else if let s = try? c.decode(String.self) { wrappedValue = Double(s) }
+        else if let s = try? c.decode(String.self) { wrappedValue = Double(s).flatMap { $0.isFinite ? $0 : nil } }  // "nan"/"inf" → nil, иначе Int(Double) упадёт
         else { wrappedValue = nil }
     }
     func encode(to encoder: Encoder) throws {

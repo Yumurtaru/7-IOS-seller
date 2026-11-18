@@ -22,7 +22,7 @@ final class ReviewsViewModel: ObservableObject {
     @Published var hasMore = false
     @Published var loadingMore = false
     private var page = 1
-    private static let perPage = 50
+    private static let perPage = 200   // как до постраничной загрузки (сервер: до 200), максимум limit = 200
 
     static let statusChips: [(String?, String)] = [
         (nil, "Все"), ("pending", "На модерации"), ("approved", "Опубликованы"), ("rejected", "Отклонены"),

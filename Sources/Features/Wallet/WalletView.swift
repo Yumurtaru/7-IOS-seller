@@ -103,6 +103,8 @@ final class WalletViewModel: ObservableObject {
     // ЮKassa (или реквизиты) молча не открывалась, а экран 5 минут писал
     // «Ожидаем оплату».
     var topupSheetOpen = false
+    /// Обрыв связи при пополнении: заявка могла дойти до сервера — лист закрываем (как Android).
+    var topupOutcomeUnknown = false
     private var pendingPayLink: PayLink?
     private var pendingRequisites: TopupRequisites?
 
@@ -115,6 +117,7 @@ final class WalletViewModel: ObservableObject {
     func topup(amount: Decimal, method: String) async -> Bool {
         error = nil
         successMessage = nil
+        topupOutcomeUnknown = false
         defer { if !topupSheetOpen { presentPending() } }
         do {
             let res = try await API.shared.walletTopup(amount: amount, method: method)
@@ -143,6 +146,7 @@ final class WalletViewModel: ObservableObject {
                 switch e {
                 case .network, .timeout:
                     msg += ". Заявка могла создаться — закройте окно и проверьте «Ожидают подтверждения», прежде чем повторять"
+                    topupOutcomeUnknown = true
                     await load()
                 default: break
                 }
@@ -677,7 +681,9 @@ struct TopupSheet: View {
         localError = nil
         let ok = await vm.topup(amount: amount, method: method)
         isSubmitting = false
-        if ok { dismiss() } else { localError = vm.error }
+        // Исход неизвестен (обрыв/таймаут): закрываем лист, чтобы повторный тап не создал
+        // второе пополнение; сообщение «проверьте Ожидают подтверждения» остаётся на экране кошелька.
+        if ok || vm.topupOutcomeUnknown { dismiss() } else { localError = vm.error }
     }
 }
 
